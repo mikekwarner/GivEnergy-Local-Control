@@ -2,6 +2,8 @@
 
 Local, cloud-free monitoring, control, and historic telemetry server for **GivEnergy Hybrid Inverters, Batteries, and EV Chargers**, designed to run 24/7 on a **Raspberry Pi** (Pi 400, Pi 4, Pi 5, etc.) with a standalone **Windows Deployment Installer**.
 
+![GivEnergy Local Control Web Dashboard](docs/dashboard-preview.jpg)
+
 ---
 
 ## Key Features

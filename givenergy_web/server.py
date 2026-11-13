@@ -319,9 +319,9 @@ async def api_system_stats():
 def _run_sudo_power_action(action: str) -> tuple[bool, str]:
     """Trigger reboot or poweroff via passwordless sudo after a short delay."""
     cmd_arg = "reboot" if action == "reboot" else "poweroff"
-    check = subprocess.run(["sudo", "-n", "true"], capture_output=True, text=True, timeout=5)
+    check = subprocess.run(["sudo", "-n", "-l", "systemctl", cmd_arg], capture_output=True, text=True, timeout=5)
     if check.returncode != 0:
-        return False, "Passwordless sudo is not configured for this service user. Re-deploy with the wizard to enable."
+        return False, "Passwordless sudo is not configured for this service user. Re-deploy with the installer to enable."
     subprocess.Popen(
         ["bash", "-c", f"sleep 1 && sudo -n systemctl {cmd_arg}"],
         stdout=subprocess.DEVNULL,

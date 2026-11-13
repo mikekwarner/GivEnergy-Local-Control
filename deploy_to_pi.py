@@ -139,6 +139,7 @@ def main(
                 f"Defaults:{user} env_keep += \"DEBIAN_FRONTEND\"\n"
                 f"{user} ALL=(root) NOPASSWD: "
                 "/bin/systemctl reboot, /bin/systemctl poweroff, "
+                "/usr/bin/systemctl reboot, /usr/bin/systemctl poweroff, "
                 "/sbin/reboot, /sbin/poweroff, /usr/sbin/reboot, /usr/sbin/poweroff, "
                 "/usr/bin/apt-get update, /usr/bin/apt-get upgrade -y\n"
             )

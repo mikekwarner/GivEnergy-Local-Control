@@ -16,11 +16,11 @@ Local, cloud-free monitoring, control, and historic telemetry server for **GivEn
 - **Raspberry Pi System & Maintenance Tab** — Displays detected Pi hardware model, CPU temperature, RAM/storage usage, OS software updates with live progress, reboot-required detection, and Restart / Shut Down actions.
 - **Optional Tailscale Remote Access & Funnel** — Guided Tailscale + Tailscale Funnel HTTPS setup with automatic Bearer Token authentication and QR code pairing for secure off-site and Android app access without router port-forwarding or running a VPN client on your phone.
 - **Android Companion App (`givenergy-local-control.apk`)** — Native Jetpack Compose Android app with live power flow, battery/BMS & grid voltage details, interactive historical time-series graphs, and one-scan QR pairing.
-- **Standalone Windows Installer (`GivEnergy-Local-Control-Installer.exe`)** — No Python installation required on the deployment PC.
+- **Standalone Windows Installer (`GivEnergy-Local-Control-Installer.exe`)** — Full Pi software installation and configuration from the deployment PC.
 
 ---
 
-## Quick Start (Windows — No Python Required)
+## Quick Start (Windows)
 
 1. Download **`GivEnergy-Local-Control-Installer.exe`** from the [**v1.1.0 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v1.1.0).
 2. Double-click `GivEnergy-Local-Control-Installer.exe` and follow the 5-step wizard:

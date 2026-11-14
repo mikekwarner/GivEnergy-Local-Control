@@ -239,6 +239,9 @@
       }
     }
     @media (max-width: 768px) {
+      html, body {
+        overflow-x: hidden;
+      }
       .kpi-grid {
         grid-template-columns: repeat(2, 1fr);
         gap: 6px;
@@ -250,12 +253,10 @@
         gap: 8px;
       }
       .brand-icon {
-        width: 30px;
-        height: 30px;
-        font-size: 15px;
+        display: none;
       }
       .brand-title {
-        font-size: 14.5px;
+        font-size: 14px;
       }
       .brand-sub {
         display: none;
@@ -272,8 +273,11 @@
         font-size: 11.5px;
       }
       .workspace {
-        padding: 10px 10px 24px;
+        padding: 10px 10px 76px;
         gap: 10px;
+      }
+      .workspace > * {
+        min-width: 0;
       }
       .kpi-card {
         padding: 8px 10px;
@@ -289,18 +293,27 @@
         font-size: 10px;
       }
       .tabs-bar {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        z-index: 40;
+        background: rgba(17, 24, 39, 0.96);
+        backdrop-filter: blur(10px);
+        border-top: 1px solid var(--border);
+        border-bottom: none;
         flex-wrap: nowrap;
         overflow-x: auto;
         -webkit-overflow-scrolling: touch;
         scrollbar-width: none;
-        padding-bottom: 6px;
-        margin-bottom: 10px;
+        padding: 7px 10px calc(7px + env(safe-area-inset-bottom));
+        margin-bottom: 0;
       }
       .tabs-bar::-webkit-scrollbar {
         display: none;
       }
       .tab-btn {
-        padding: 6px 11px;
+        padding: 7px 12px;
         font-size: 12px;
         white-space: nowrap;
         flex-shrink: 0;
@@ -312,6 +325,7 @@
       .panel-header {
         margin-bottom: 8px;
         gap: 6px;
+        flex-wrap: wrap;
       }
       .panel-title {
         font-size: 13px;
@@ -326,6 +340,15 @@
       .ctrl-group {
         padding: 9px 10px;
         margin-bottom: 8px;
+      }
+      .input-row {
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .data-table {
+        display: block;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
       }
     }
 
@@ -702,7 +725,7 @@
     <div class="brand">
       <div class="brand-icon">⚡</div>
       <div>
-        <div class="brand-title" id="hdr-title"><span id="hdr-title-text">GivEnergy Local Control &amp; Historic Server</span> <span id="hdr-version" style="font-size:11px; font-weight:600; color:#93C5FD; background:#111827; border:1px solid #2E3F5E; border-radius:999px; padding:1px 7px; margin-left:6px; vertical-align:middle;">v1.0.0</span></div>
+        <div class="brand-title" id="hdr-title"><span id="hdr-title-text">GivEnergy Local Control &amp; Historic Server</span> <span id="hdr-version" style="font-size:11px; font-weight:600; color:#93C5FD; background:#111827; border:1px solid #2E3F5E; border-radius:999px; padding:1px 7px; margin-left:6px; vertical-align:middle;">v1.1.0</span></div>
         <div class="brand-sub" id="hdr-sub">Raspberry Pi • Auto-Adaptive Local Telemetry &amp; Control</div>
       </div>
     </div>
@@ -1094,6 +1117,41 @@
             </div>
             <div id="scan-results-box" style="font-size:12.5px; color:var(--text-muted); line-height:1.6;">
               Click <b>Scan Local Network</b> when setting up a new property to automatically find GivEnergy hardware IPs on the local router.
+            </div>
+          </div>
+        </div>
+
+        <div class="panel" id="panel-remote-pairing" style="margin-top:16px;">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title">🔐 Remote Access &amp; Android App Pairing (Tailscale Funnel)</div>
+              <div class="panel-sub">Use these credentials in the Android app or remote browser. Visible only on your local network.</div>
+            </div>
+            <button class="btn" onclick="loadPairingInfo()">↺ Refresh</button>
+          </div>
+          <div id="pairing-lan-only-msg" style="display:none; font-size:12.5px; color:var(--text-muted);">
+            Pairing credentials are hidden when accessed remotely. Open this dashboard on your home LAN to view or rotate your Bearer Token.
+          </div>
+          <div id="pairing-fields" style="display:flex; gap:18px; align-items:center; flex-wrap:wrap;">
+            <div style="background:#fff; padding:8px; border-radius:10px; flex:0 0 auto;">
+              <img id="pair-qr-img" src="" alt="Android Pairing QR Code" style="width:148px; height:148px; display:block;" />
+            </div>
+            <div style="flex:1; min-width:260px;">
+              <div class="input-row" style="margin-bottom:10px;">
+                <span style="width:140px; color:var(--text-muted);">Funnel HTTPS URL:</span>
+                <input type="text" id="pair-funnel-url" readonly value="Loading…" style="flex:1; background:#090D16; color:var(--text-main); border:1px solid var(--border-bright); border-radius:6px; padding:6px 10px; font-family:var(--font-mono);" />
+                <button class="btn" onclick="copyPairingField('pair-funnel-url')">Copy</button>
+              </div>
+              <div class="input-row" style="margin-bottom:8px;">
+                <span style="width:140px; color:var(--text-muted);">Bearer Token:</span>
+                <input type="password" id="pair-api-token" readonly value="" style="flex:1; background:#090D16; color:var(--text-main); border:1px solid var(--border-bright); border-radius:6px; padding:6px 10px; font-family:var(--font-mono);" />
+                <button class="btn" id="btn-toggle-tok" onclick="togglePairingToken()">Show</button>
+                <button class="btn" onclick="copyPairingField('pair-api-token')">Copy</button>
+                <button class="btn danger" onclick="regeneratePairingToken()">Rotate</button>
+              </div>
+              <div style="font-size:11.5px; color:var(--text-muted);">
+                Scan this QR code in the Android app to configure both your remote Funnel URL and Bearer Token automatically.
+              </div>
             </div>
           </div>
         </div>
@@ -2508,7 +2566,7 @@
 
       if (sys && sys.hostname) {
         const piRows = [
-          ['App Version', `v${sys.app_version || '1.0.0'}`],
+          ['App Version', `v${sys.app_version || '1.1.0'}`],
           ['Hostname & Hardware', `${sys.hostname} (${sys.hardware_model || 'Raspberry Pi'})`],
           ['Operating System & Python', `${sys.os_release} • Python ${sys.python_version}`],
           ['CPU Temperature', `${sys.cpu_temp_c ?? '—'} °C`],
@@ -2550,9 +2608,71 @@
         document.getElementById('cfg-evc-en').checked = cfg.evc_enabled === true;
         document.getElementById('cfg-evc-ip').value = cfg.evc_ip || '';
         document.getElementById('cfg-evc-port').value = cfg.evc_port || 502;
+        loadPairingInfo();
         return cfg;
       } catch (e) {
         return null;
+      }
+    }
+
+    async function loadPairingInfo() {
+      const fields = document.getElementById('pairing-fields');
+      const msg = document.getElementById('pairing-lan-only-msg');
+      try {
+        const res = await fetch('/api/auth/pairing');
+        if (!res.ok) {
+          if (fields) fields.style.display = 'none';
+          if (msg) msg.style.display = 'block';
+          return;
+        }
+        const data = await res.json();
+        if (fields) fields.style.display = 'flex';
+        if (msg) msg.style.display = 'none';
+        document.getElementById('pair-funnel-url').value = data.funnel_url || 'Tailscale Funnel not active yet';
+        document.getElementById('pair-api-token').value = data.api_token || '';
+        const qr = document.getElementById('pair-qr-img');
+        if (qr) qr.src = `/api/auth/pairing/qr.svg?t=${Date.now()}`;
+      } catch (e) {}
+    }
+
+    function togglePairingToken() {
+      const inp = document.getElementById('pair-api-token');
+      const btn = document.getElementById('btn-toggle-tok');
+      if (inp.type === 'password') {
+        inp.type = 'text';
+        btn.textContent = 'Hide';
+      } else {
+        inp.type = 'password';
+        btn.textContent = 'Show';
+      }
+    }
+
+    async function copyPairingField(id) {
+      const val = document.getElementById(id)?.value || '';
+      if (!val) return;
+      try {
+        await navigator.clipboard.writeText(val);
+        showToast('✓ Copied to clipboard');
+      } catch (e) {
+        showToast('⚠ Clipboard unavailable');
+      }
+    }
+
+    async function regeneratePairingToken() {
+      if (!confirm('Rotate Bearer Token? Any remote device using the old token will need to be updated.')) return;
+      try {
+        const res = await fetch('/api/auth/regenerate-token', { method: 'POST' });
+        if (res.ok) {
+          const data = await res.json();
+          document.getElementById('pair-api-token').value = data.api_token || '';
+          const qr = document.getElementById('pair-qr-img');
+          if (qr) qr.src = `/api/auth/pairing/qr.svg?t=${Date.now()}`;
+          showToast('✓ Bearer Token rotated');
+        } else {
+          showToast('⚠ Failed to rotate token');
+        }
+      } catch (e) {
+        showToast('⚠ Network error rotating token');
       }
     }
 

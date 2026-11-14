@@ -9,6 +9,7 @@ echo Building standalone GivEnergy-Local-Control-Installer.exe ...
   --windowed ^
   --onefile ^
   --name GivEnergy-Local-Control-Installer ^
+  --icon "givenergy_web\static\icon.ico" ^
   --add-data "givenergy_app;givenergy_app" ^
   --add-data "givenergy_web;givenergy_web" ^
   wizard.py

@@ -1,0 +1,9 @@
+<resources>
+    <style name="Theme.GivEnergyLocalControl" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">#2563EB</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="android:colorBackground">#0B1120</item>
+        <item name="android:statusBarColor">#111827</item>
+        <item name="android:navigationBarColor">#0B1120</item>
+    </style>
+</resources>

@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0B1120"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="⚡ GivEnergy Pi Pairing"
+            android:textColor="#F1F5F9"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:layout_marginBottom="18dp"
+            android:text="Open your GivEnergy dashboard on your home network (⚙ Property Setup) and scan the Pairing QR Code, or enter the details below."
+            android:textColor="#94A3B8"
+            android:textSize="13.5sp" />
+
+        <Button
+            android:id="@+id/btnScanQr"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:backgroundTint="#2563EB"
+            android:text="📷  Scan Pairing QR Code"
+            android:textColor="#FFFFFF"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:layout_marginBottom="6dp"
+            android:text="Property Name"
+            android:textColor="#CBD5E1"
+            android:textSize="12.5sp" />
+
+        <EditText
+            android:id="@+id/edtPropertyName"
+            android:layout_width="match_parent"
+            android:layout_height="46dp"
+            android:background="#111827"
+            android:hint="Home"
+            android:inputType="text"
+            android:paddingHorizontal="12dp"
+            android:textColor="#F1F5F9"
+            android:textColorHint="#64748B"
+            android:textSize="14sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:layout_marginBottom="6dp"
+            android:text="Tailscale Funnel HTTPS URL"
+            android:textColor="#CBD5E1"
+            android:textSize="12.5sp" />
+
+        <EditText
+            android:id="@+id/edtFunnelUrl"
+            android:layout_width="match_parent"
+            android:layout_height="46dp"
+            android:background="#111827"
+            android:hint="https://givenergy-pi400.tailnet.ts.net"
+            android:inputType="textUri"
+            android:paddingHorizontal="12dp"
+            android:textColor="#F1F5F9"
+            android:textColorHint="#64748B"
+            android:textSize="14sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:layout_marginBottom="6dp"
+            android:text="Local LAN URL (Optional — fast path at home)"
+            android:textColor="#CBD5E1"
+            android:textSize="12.5sp" />
+
+        <EditText
+            android:id="@+id/edtLanUrl"
+            android:layout_width="match_parent"
+            android:layout_height="46dp"
+            android:background="#111827"
+            android:hint="http://192.168.1.50"
+            android:inputType="textUri"
+            android:paddingHorizontal="12dp"
+            android:textColor="#F1F5F9"
+            android:textColorHint="#64748B"
+            android:textSize="14sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:layout_marginBottom="6dp"
+            android:text="Bearer Token"
+            android:textColor="#CBD5E1"
+            android:textSize="12.5sp" />
+
+        <EditText
+            android:id="@+id/edtApiToken"
+            android:layout_width="match_parent"
+            android:layout_height="46dp"
+            android:background="#111827"
+            android:hint="Paste Bearer Token"
+            android:inputType="textPassword"
+            android:paddingHorizontal="12dp"
+            android:textColor="#F1F5F9"
+            android:textColorHint="#64748B"
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/txtSetupStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:textColor="#F87171"
+            android:textSize="13sp"
+            android:visibility="gone" />
+
+        <Button
+            android:id="@+id/btnSaveConnect"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:layout_marginTop="18dp"
+            android:backgroundTint="#10B981"
+            android:text="Test &amp; Connect"
+            android:textColor="#FFFFFF"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+</ScrollView>

@@ -10,3 +10,14 @@ property_config.json
 build/
 dist/
 *.spec
+
+# Android
+givenergy_android/.gradle/
+givenergy_android/.kotlin/
+givenergy_android/local.properties
+givenergy_android/**/build/
+.idea/
+*.apk
+*.aab
+*.jks
+*.keystore

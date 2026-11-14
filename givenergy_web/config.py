@@ -6,6 +6,7 @@ import asyncio
 import ipaddress
 import json
 import os
+import secrets
 import socket
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -23,6 +24,7 @@ class PropertyConfig:
     evc_port: int = 502
     has_solar_pv: str = "auto"  # "auto", "yes", or "no"
     poll_interval_s: float = 5.0
+    api_token: str = ""
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -46,6 +48,7 @@ def load_config(config_path: Path) -> PropertyConfig:
         evc_port=int(os.environ.get("GIVENERGY_EVC_PORT", "502")),
         has_solar_pv=os.environ.get("GIVENERGY_HAS_SOLAR", "auto"),
         poll_interval_s=float(os.environ.get("GIVENERGY_POLL_INTERVAL", "5.0")),
+        api_token=os.environ.get("GIVENERGY_API_TOKEN", "").strip(),
     )
     if config_path.exists():
         try:
@@ -54,6 +57,12 @@ def load_config(config_path: Path) -> PropertyConfig:
                 for k, v in raw.items():
                     if hasattr(cfg, k):
                         setattr(cfg, k, v)
+        except Exception:
+            pass
+    if not cfg.api_token:
+        cfg.api_token = secrets.token_urlsafe(32)
+        try:
+            save_config(config_path, cfg)
         except Exception:
             pass
     return cfg

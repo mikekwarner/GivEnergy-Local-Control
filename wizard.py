@@ -17,7 +17,7 @@ from pathlib import Path
 
 import paramiko
 from PySide6.QtCore import Qt, QThread, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QFont
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon
 from PySide6.QtWidgets import (
     QAbstractButton,
     QApplication,
@@ -437,6 +437,11 @@ class DeployWorker(QThread):
                     state, ts_ip, ts_dns = setup_pi.get_tailscale_info(ssh)
                     if state == "Running" and ts_ip:
                         self.log_line.emit(f"  [OK] Tailscale already connected: {ts_ip} ({ts_dns})")
+                        ok_f, f_url, f_err = setup_pi.enable_tailscale_funnel(ssh, password=self.password)
+                        if ok_f:
+                            self.log_line.emit(f"  [OK] Tailscale Funnel enabled: {f_url or 'https://' + ts_dns}")
+                        else:
+                            self.log_line.emit(f"  [WARN] Tailscale Funnel not enabled: {f_err}")
                     elif self.tailscale_authkey:
                         self.log_line.emit("  Authenticating Tailscale with Auth Key...")
                         rc, out, err = self._run_remote(
@@ -446,6 +451,11 @@ class DeployWorker(QThread):
                             raise RuntimeError(f"tailscale up failed: {err or out}")
                         _, ts_ip, ts_dns = setup_pi.get_tailscale_info(ssh)
                         self.log_line.emit(f"  [OK] Tailscale connected: {ts_ip} ({ts_dns})")
+                        ok_f, f_url, f_err = setup_pi.enable_tailscale_funnel(ssh, password=self.password)
+                        if ok_f:
+                            self.log_line.emit(f"  [OK] Tailscale Funnel enabled: {f_url or 'https://' + ts_dns}")
+                        else:
+                            self.log_line.emit(f"  [WARN] Tailscale Funnel not enabled: {f_err}")
                     else:
                         self.log_line.emit("  Starting Tailscale browser authentication...")
                         self._run_remote(
@@ -499,6 +509,10 @@ class DeployWorker(QThread):
                     ssh2.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                     ssh2.connect(self.host, username=self.user, password=self.password, timeout=6.0)
                     _, ts_ip, ts_dns = setup_pi.get_tailscale_info(ssh2)
+                    if ts_ip:
+                        ok_f, f_url, f_err = setup_pi.enable_tailscale_funnel(ssh2, password=self.password)
+                        if ok_f:
+                            self.log_line.emit(f"  [OK] Tailscale Funnel enabled: {f_url or 'https://' + ts_dns}")
                     ssh2.close()
                 except Exception:
                     pass
@@ -677,7 +691,13 @@ class DiscoverPiPage(QWizardPage):
 
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(["IP Address", "MAC Address", "Device Info", "SSH (:22)", "Status"])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        hdr = self.table.horizontalHeader()
+        hdr.setMinimumSectionSize(75)
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(2, QHeaderView.Stretch)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -763,15 +783,15 @@ class CredentialsPage(QWizardPage):
         self.setSubTitle("Confirm the target Raspberry Pi SSH login and optional Tailscale settings.")
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(14)
+        layout.setSpacing(10)
 
-        row_h = 34
+        row_h = 32
 
         grp_ssh = QGroupBox("Raspberry Pi SSH Connection")
         form = QGridLayout(grp_ssh)
-        form.setVerticalSpacing(14)
+        form.setVerticalSpacing(10)
         form.setHorizontalSpacing(12)
-        form.setContentsMargins(14, 20, 14, 14)
+        form.setContentsMargins(14, 18, 14, 12)
         form.setColumnStretch(1, 1)
 
         self.inp_host = QLineEdit(os.environ.get("GIVENERGY_PI_HOST", ""))
@@ -830,10 +850,10 @@ class CredentialsPage(QWizardPage):
         self.chk_tailscale.setChecked(True)
 
         lbl_ts_info = QLabel(
-            "<b>What Tailscale is used for:</b> Tailscale creates a private, encrypted VPN mesh so you can "
-            "remotely view and control this GivEnergy dashboard from your phone or PC anywhere in the world "
-            "without opening router ports or exposing the Pi to the internet.<br>"
-            "When enabled, Step 4 will show a one-click <b>login.tailscale.com</b> link to approve and connect this Pi."
+            "<b>What Tailscale is used for:</b> Enables <b>Tailscale Funnel</b> (HTTPS + Bearer Token) for remote access "
+            "via browser or the <b>GivEnergy Control Android app</b> (<code>givenergy-local-control.apk</code>) without "
+            "router port-forwarding or Tailscale on your phone.<br>"
+            "Step 4 provides a <b>login.tailscale.com</b> link; pair the Android app via the QR code in <b>⚙ Property Setup</b>."
         )
         lbl_ts_info.setWordWrap(True)
         lbl_ts_info.setStyleSheet("color: #94A3B8; font-size: 11.5px;")
@@ -856,10 +876,9 @@ class CredentialsPage(QWizardPage):
         self.cmb_storage.addItem("MicroSD Card (Wear-Protection: RAM logs, 60s DB batch, noatime)", "sd")
         self.cmb_storage.addItem("NVMe / USB SSD (High-Durability: Disk logs, 15s DB flush, fstrim, noatime)", "ssd")
         self.lbl_storage_hint = QLabel(
-            "<b>Why this matters:</b> Frequent telemetry and OS log writes can wear out a MicroSD card over time. "
-            "Choosing <b>MicroSD Card</b> keeps system logs in RAM and batches database writes (60s) to maximize card life; "
-            "choosing <b>NVMe / USB SSD</b> enables persistent disk logs, faster 15s flushes, and periodic <code>fstrim</code>. "
-            "Click <i>Test SSH Connection</i> above to auto-detect your Pi's boot media."
+            "<b>Why this matters:</b> <b>MicroSD Card</b> keeps logs in RAM (60s DB batch) to reduce card wear; "
+            "<b>NVMe / USB SSD</b> enables disk logs, 15s flush, and <code>fstrim</code>. "
+            "Click <i>Test SSH Connection</i> above to auto-detect."
         )
         self.lbl_storage_hint.setStyleSheet("color: #94A3B8; font-size: 11.5px;")
         self.lbl_storage_hint.setWordWrap(True)
@@ -882,6 +901,9 @@ class CredentialsPage(QWizardPage):
         detected = self.field("detected_ip")
         if detected and str(detected).strip():
             self.inp_host.setText(str(detected).strip())
+        self.updateGeometry()
+        if self.layout() is not None:
+            self.layout().activate()
 
     def _test_ssh(self) -> None:
         host = self.inp_host.text().strip()
@@ -1035,6 +1057,10 @@ class FinishPage(QWizardPage):
             lines.append(f"<b>Tailscale IP (Remote):</b> <a style='color:#34D399;' href='http://{ts_ip}'>http://{ts_ip}</a>")
         if ts_dns:
             lines.append(f"<b>Tailscale MagicDNS:</b> <a style='color:#34D399;' href='http://{ts_dns}'>http://{ts_dns}</a>")
+            lines.append(
+                f"<b>Tailscale Funnel (Public HTTPS + Bearer Auth):</b> "
+                f"<a style='color:#38BDF8;' href='https://{ts_dns}'>https://{ts_dns}</a>"
+            )
         if ts_auth and not ts_ip:
             lines.append(
                 f"<b>Tailscale Pending Approval:</b> <a style='color:#FBBF24;' href='{ts_auth}'>{ts_auth}</a>"
@@ -1042,7 +1068,8 @@ class FinishPage(QWizardPage):
         lines.append(
             "<br><b>Next Step:</b> Open <b>⚙ Property Setup</b> below — your local network will be scanned "
             "automatically and any GivEnergy Inverter (<code>:8899</code>) or EV Charger (<code>:502</code>) "
-            "found will be configured for you. Please review the detected IP addresses and settings to confirm they are correct."
+            "found will be configured for you. You can also scan the <b>Android App Pairing QR Code</b> there "
+            "to connect <code>givenergy-local-control.apk</code>."
         )
         self.lbl_summary.setText("<br>".join(lines))
 
@@ -1055,12 +1082,23 @@ class FinishPage(QWizardPage):
         QDesktopServices.openUrl(QUrl(url))
 
 
+def _app_icon() -> QIcon:
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    for rel in ("givenergy_web/static/icon.ico", "givenergy_web/static/icon-512.png"):
+        p = base / rel
+        if p.exists():
+            return QIcon(str(p))
+    return QIcon()
+
+
 class GivEnergyDeploymentWizard(QWizard):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(f"GivEnergy Raspberry Pi Deployment Wizard v{APP_VERSION}")
+        self.setWindowIcon(_app_icon())
         self.setWizardStyle(QWizard.ClassicStyle)
-        self.resize(840, 720)
+        self.resize(860, 780)
+        self.setMinimumSize(840, 750)
         self.deployed_local_url = ""
         self.deployed_ts_ip = ""
         self.deployed_ts_dns = ""
@@ -1087,6 +1125,7 @@ class GivEnergyDeploymentWizard(QWizard):
 def main() -> int:
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    app.setWindowIcon(_app_icon())
     app.setStyleSheet(WIZARD_STYLESHEET)
     wiz = GivEnergyDeploymentWizard()
     wiz.show()

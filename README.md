@@ -1,4 +1,4 @@
-# GivEnergy Local Control (`v1.0.0`)
+# GivEnergy Local Control (`v1.1.0`)
 
 Local, cloud-free monitoring, control, and historic telemetry server for **GivEnergy Hybrid Inverters, Batteries, and EV Chargers**, designed to run 24/7 on a **Raspberry Pi** (Pi 400, Pi 4, Pi 5, etc.) with a standalone **Windows Deployment Installer**.
 
@@ -14,20 +14,31 @@ Local, cloud-free monitoring, control, and historic telemetry server for **GivEn
 - **Battery & BMS + Grid Voltage Views** — Per-cell voltage monitoring, BMS status, and grid voltage history charts.
 - **Auto-Discovery & Property Setup** — Automatically scans your local `/24` subnet for GivEnergy Inverters and EV Chargers on first setup and saves configuration to `property_config.json`.
 - **Raspberry Pi System & Maintenance Tab** — Displays detected Pi hardware model, CPU temperature, RAM/storage usage, OS software updates with live progress, reboot-required detection, and Restart / Shut Down actions.
-- **Optional Tailscale Remote Access** — Guided one-click Tailscale setup for encrypted off-site access from phones and laptops without router port-forwarding.
+- **Optional Tailscale Remote Access & Funnel** — Guided Tailscale + Tailscale Funnel HTTPS setup with automatic Bearer Token authentication and QR code pairing for secure off-site and Android app access without router port-forwarding or running a VPN client on your phone.
+- **Android Companion App (`givenergy-local-control.apk`)** — Native Jetpack Compose Android app with live power flow, battery/BMS & grid voltage details, interactive historical time-series graphs, and one-scan QR pairing.
 - **Standalone Windows Installer (`GivEnergy-Local-Control-Installer.exe`)** — No Python installation required on the deployment PC.
 
 ---
 
 ## Quick Start (Windows — No Python Required)
 
-1. Download **`GivEnergy-Local-Control-Installer.exe`** from the [**v1.0.0 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v1.0.0).
+1. Download **`GivEnergy-Local-Control-Installer.exe`** from the [**v1.1.0 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v1.1.0).
 2. Double-click `GivEnergy-Local-Control-Installer.exe` and follow the 5-step wizard:
    - **Step 1:** Prepare a Raspberry Pi OS Lite SD/SSD card using Raspberry Pi Imager (auto-detected if installed).
    - **Step 2:** Auto-detect Raspberry Pis on your local network (also shows currently installed version & available upgrades).
    - **Step 3:** Enter SSH credentials, choose Tailscale remote access, select MicroSD vs. NVMe/SSD optimization, and optionally wipe previous data/config.
    - **Step 4:** Automated provisioning, Python environment setup, Tailscale login link, and `systemd` service deployment.
    - **Step 5:** Open the dashboard directly to **⚙ Property Setup** to verify auto-discovered Inverter and EV Charger IPs.
+
+---
+
+## Android Companion App
+
+1. Download **`givenergy-local-control.apk`** from the [**v1.1.0 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v1.1.0) and install it on your Android phone (enable *Install unknown apps* if prompted).
+2. Enable **Tailscale Funnel** during Step 3 of the Windows Installer (or view your pairing details in the dashboard under **⚙ Property Setup → Remote Access**).
+3. Open **GivEnergy Local Control** on your phone and scan the **QR Code** (or paste your Funnel HTTPS URL and Bearer Token) to pair.
+
+<img src="docs/android-preview.png" width="300" alt="GivEnergy Local Control Android App" />
 
 ---
 
@@ -66,5 +77,6 @@ pip install -r requirements.txt
 - `wizard.py` — PySide6 Windows Deployment Installer GUI
 - `deploy_to_pi.py` & `setup_pi.py` — Automated Raspberry Pi SSH/SFTP provisioning & systemd deployment
 - `givenergy_web/` — FastAPI + WebSocket backend, async Modbus poller, SQLite WAL database, and web UI (`static/index.html`)
+- `givenergy_android/` — Native Kotlin / Jetpack Compose Android companion app (`givenergy-local-control.apk`)
 - `givenergy_app/` & `main.py` — Local Windows PySide6 desktop monitor/control app
 - `build_wizard_exe.bat` — PyInstaller build script for `GivEnergy-Local-Control-Installer.exe`

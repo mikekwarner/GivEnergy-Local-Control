@@ -1,0 +1,1 @@
+# Keep standard Android rules

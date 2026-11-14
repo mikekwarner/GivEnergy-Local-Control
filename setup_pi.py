@@ -36,15 +36,17 @@ PI_PACKAGES = [
     "fastapi",
     "uvicorn[standard]",
     "websockets",
+    "qrcode",
 ]
 
 
-def run_remote(ssh: paramiko.SSHClient, cmd: str, sudo: bool = False) -> tuple[int, str, str]:
+def run_remote(ssh: paramiko.SSHClient, cmd: str, sudo: bool = False, password: str | None = None) -> tuple[int, str, str]:
+    pw = PI_PASS if password is None else password
     if sudo:
         escaped = cmd.replace("'", "'\"'\"'")
         full_cmd = f"sudo -S -p '' bash -c '{escaped}'"
         stdin, stdout, stderr = ssh.exec_command(full_cmd)
-        stdin.write(PI_PASS + "\n")
+        stdin.write(pw + "\n")
         stdin.flush()
     else:
         stdin, stdout, stderr = ssh.exec_command(cmd)
@@ -130,6 +132,22 @@ def get_tailscale_info(ssh: paramiko.SSHClient) -> tuple[str, str, str]:
         return "Unknown", "", ""
 
 
+def enable_tailscale_funnel(
+    ssh: paramiko.SSHClient,
+    local_port: int = 80,
+    password: str | None = None,
+) -> tuple[bool, str, str]:
+    """Enable persistent Tailscale Funnel for local_port and return (ok, funnel_url, err_msg)."""
+    state, ipv4, dns_name = get_tailscale_info(ssh)
+    if state != "Running" or not ipv4:
+        return False, "", "Tailscale is not connected yet."
+    rc, out, err = run_remote(ssh, f"tailscale funnel --bg {int(local_port)}", sudo=True, password=password)
+    if rc != 0:
+        return False, "", err or out or f"tailscale funnel exited with {rc}"
+    funnel_url = f"https://{dns_name}" if dns_name else ""
+    return True, funnel_url, ""
+
+
 def configure_tailscale(ssh: paramiko.SSHClient, wait_for_auth: bool = True) -> tuple[str, str]:
     print("\n[3/5] Installing & configuring Tailscale for secure remote access...")
     rc, _, _ = run_remote(ssh, "which tailscale >/dev/null 2>&1")
@@ -144,6 +162,11 @@ def configure_tailscale(ssh: paramiko.SSHClient, wait_for_auth: bool = True) -> 
     state, ipv4, dns_name = get_tailscale_info(ssh)
     if state == "Running" and ipv4:
         print(f"  [OK] Tailscale already connected: {ipv4} ({dns_name or 'MagicDNS'})")
+        ok_f, f_url, f_err = enable_tailscale_funnel(ssh)
+        if ok_f:
+            print(f"  [OK] Tailscale Funnel enabled: {f_url or '(active on :443 -> :80)'}")
+        else:
+            print(f"  [WARN] Could not enable Tailscale Funnel: {f_err}")
         return ipv4, dns_name
 
     authkey = os.environ.get("TAILSCALE_AUTHKEY", "").strip()
@@ -195,6 +218,11 @@ def configure_tailscale(ssh: paramiko.SSHClient, wait_for_auth: bool = True) -> 
     state, ipv4, dns_name = get_tailscale_info(ssh)
     if ipv4:
         print(f"  [OK] Tailscale connected: {ipv4} ({dns_name})")
+        ok_f, f_url, f_err = enable_tailscale_funnel(ssh)
+        if ok_f:
+            print(f"  [OK] Tailscale Funnel enabled: {f_url or '(active on :443 -> :80)'}")
+        else:
+            print(f"  [WARN] Could not enable Tailscale Funnel: {f_err}")
     return ipv4, dns_name
 
 
@@ -230,6 +258,7 @@ def main() -> int:
         print(f"  Tailscale IP  : http://{ts_ip}")
     if ts_dns:
         print(f"  MagicDNS URL  : http://{ts_dns}")
+        print(f"  Funnel HTTPS  : https://{ts_dns}  (Bearer Token auth enabled)")
     return 0
 
 

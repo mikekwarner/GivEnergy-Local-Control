@@ -44,6 +44,8 @@ Local, cloud-free monitoring, control, and historic telemetry server for **GivEn
 
 ## Running or Building from Source
 
+### Windows Desktop App & Pi Installer
+
 ```powershell
 # 1. Create virtual environment & install dependencies
 python -m venv .venv
@@ -57,6 +59,19 @@ pip install -r requirements.txt
 
 # 3. Build the standalone Windows executable (dist\GivEnergy-Local-Control-Installer.exe)
 .\build_wizard_exe.bat
+```
+
+### Android Companion App (`givenergy_android/`)
+
+Requires **Android Studio** (or **Gradle** + **JDK 17** and Android SDK `compileSdk = 37`, `minSdk = 24`):
+
+1. Open `givenergy_android/` in **Android Studio** and let Gradle sync, then click **Run** or **Build → Build Bundle(s) / APK(s) → Build APK(s)**.
+2. Or build from the command line (with `ANDROID_HOME` set or `sdk.dir=...` in `givenergy_android/local.properties`):
+
+```powershell
+cd givenergy_android
+gradle assembleDebug
+# Output: givenergy_android\app\build\outputs\apk\debug\givenergy-local-control-debug.apk
 ```
 
 ---

@@ -788,12 +788,19 @@
           <div class="kpi-sub" id="kpi-inv-targets">Target: —% | Rsv: —%</div>
           <div class="kpi-sub2" id="kpi-inv-slot">Chg1: —</div>
         </div>
+        <div class="kpi-card" id="kpi-card-cost" style="--accent: #10B981; cursor:pointer;" onclick="switchTab('costs', document.getElementById('tab-btn-costs'))" title="Open Costs & Tariffs">
+          <div class="kpi-title">💷 Today Est. Cost</div>
+          <div class="kpi-val" id="kpi-cost-net">—</div>
+          <div class="kpi-sub" id="kpi-cost-breakdown">In: — | Out: —</div>
+          <div class="kpi-sub2" id="kpi-cost-rates">Rate: —p | Exp: —p</div>
+        </div>
       </section>
 
       <!-- Tab Buttons -->
       <nav class="tabs-bar">
         <button class="tab-btn active" onclick="switchTab('live', this)">⚡ Live Power Flow &amp; Timeline</button>
         <button class="tab-btn" onclick="switchTab('history', this)">📈 Historic Analytics &amp; Daily Ledger</button>
+        <button class="tab-btn" id="tab-btn-costs" onclick="switchTab('costs', this)">💷 Costs &amp; Tariffs</button>
         <button class="tab-btn" id="tab-btn-bms" onclick="switchTab('bms', this)">🔋 Battery &amp; BMS</button>
         <button class="tab-btn" onclick="switchTab('grid', this)">🔌 Grid Voltage History</button>
         <button class="tab-btn" id="tab-btn-details" onclick="switchTab('details', this)">📋 Registers</button>
@@ -909,6 +916,241 @@
                 <tr><td colspan="14" style="text-align:center; color:var(--text-muted);">Loading daily energy ledger…</td></tr>
               </tbody>
             </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2B: COSTS & TARIFFS -->
+      <section class="tab-pane" id="tab-costs">
+        <div class="kpi-strip" style="margin-bottom:14px;">
+          <div class="kpi-card" style="--accent: #38BDF8;">
+            <div class="kpi-title">📅 Today Net Cost</div>
+            <div class="kpi-val" id="cost-today-net">—</div>
+            <div class="kpi-sub" id="cost-today-sc">Standing: —</div>
+          </div>
+          <div class="kpi-card" style="--accent: #EF4444;">
+            <div class="kpi-title">⬇ Today Import Cost</div>
+            <div class="kpi-val" id="cost-today-imp">—</div>
+            <div class="kpi-sub" id="cost-today-imp-kwh">— kWh</div>
+            <div class="kpi-sub2" id="cost-today-imp-plan">—</div>
+          </div>
+          <div class="kpi-card" style="--accent: #10B981;">
+            <div class="kpi-title">⬆ Today Export Earnings</div>
+            <div class="kpi-val" id="cost-today-exp">—</div>
+            <div class="kpi-sub" id="cost-today-exp-kwh">— kWh</div>
+            <div class="kpi-sub2" id="cost-today-exp-plan">—</div>
+          </div>
+          <div class="kpi-card" style="--accent: #F59E0B;">
+            <div class="kpi-title">☀ Today Self-Use Savings</div>
+            <div class="kpi-val" id="cost-today-sav">—</div>
+            <div class="kpi-sub" id="cost-30d-summary">30d Net: —</div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title">Intraday Half-Hourly Cost &amp; Export Earnings</div>
+              <div class="panel-sub" id="cost-intraday-sub">Import outgoings vs solar export income across 30-minute slots</div>
+            </div>
+            <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+              <button class="btn" onclick="shiftCostDate(-1)">◀ Prev</button>
+              <input type="date" id="cost-date-input" onchange="loadCostsTab()" />
+              <button class="btn" onclick="shiftCostDate(1)">Next ▶</button>
+              <button class="btn" onclick="loadCostsTab()">⟳ Refresh</button>
+            </div>
+          </div>
+          <div class="legend-bar" style="margin-bottom:8px;">
+            <span class="legend-item"><span class="legend-swatch" style="background:#EF4444"></span>Import Cost (p)</span>
+            <span class="legend-item"><span class="legend-swatch" style="background:#10B981"></span>Export Earnings (p)</span>
+            <span class="legend-item"><span class="legend-swatch" style="background:#F59E0B"></span>Import Rate (p/kWh)</span>
+          </div>
+          <div class="canvas-wrap">
+            <canvas id="costIntradayCanvas" height="260"></canvas>
+            <div class="chart-tooltip" id="costChartTooltip"></div>
+          </div>
+        </div>
+
+        <div class="two-col" style="margin-bottom:14px;">
+          <!-- Tariff Picker & Setup -->
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <div class="panel-title">⚡ Tariff &amp; Supplier Setup (UK Live API + Presets)</div>
+                <div class="panel-sub">Pick Octopus Energy live rates, a UK supplier preset, or custom time windows</div>
+              </div>
+              <span class="pill" id="tariff-sync-pill">Not synced</span>
+            </div>
+
+            <div class="ctrl-group">
+              <div class="input-row">
+                <span style="flex:1; color:var(--text-muted);">UK Region (DNO / GSP):</span>
+                <select id="tariff-region" style="max-width:210px;" onchange="onTariffRegionChange()"></select>
+                <select id="tariff-currency" style="width:70px;">
+                  <option value="£">£ (p)</option>
+                  <option value="€">€ (c)</option>
+                  <option value="$">$ (¢)</option>
+                </select>
+              </div>
+              <div class="input-row">
+                <span style="flex:1; color:var(--text-muted);">Postcode Auto-Detect:</span>
+                <input type="text" id="tariff-postcode" placeholder="e.g. SW1A 1AA" style="width:120px; background:#090D16; color:var(--text-main); border:1px solid var(--border-bright); border-radius:6px; padding:5px 8px; text-transform:uppercase;" />
+                <button class="btn" onclick="lookupTariffPostcode()">🔍 Lookup</button>
+              </div>
+            </div>
+
+            <!-- Import Tariff -->
+            <div style="border-top:1px solid var(--border); padding-top:12px; margin-top:12px;">
+              <div style="font-weight:600; color:#F87171; margin-bottom:8px;">⬇ Import Tariff (Grid In)</div>
+              <div class="ctrl-group">
+                <div class="input-row">
+                  <span style="flex:1; color:var(--text-muted);">Source:</span>
+                  <select id="imp-mode" onchange="onTariffModeChange('imp')">
+                    <option value="octopus_api">Octopus Energy (Live API)</option>
+                    <option value="preset">UK Supplier Preset</option>
+                    <option value="custom">Custom Schedule</option>
+                  </select>
+                </div>
+                <div class="input-row" id="imp-octopus-row" style="display:none;">
+                  <span style="flex:1; color:var(--text-muted);">Octopus Product:</span>
+                  <select id="imp-octopus-product" style="max-width:250px;" onchange="onOctopusProductSelect('imp')"></select>
+                </div>
+                <div class="input-row" id="imp-preset-row">
+                  <span style="flex:1; color:var(--text-muted);">Supplier Plan:</span>
+                  <select id="imp-preset-select" style="max-width:250px;" onchange="applyTariffPreset('imp')"></select>
+                </div>
+                <div class="input-row">
+                  <span style="flex:1; color:var(--text-muted);" id="imp-rate-lbl">Day / Default Rate (p/kWh):</span>
+                  <input type="number" step="0.01" id="imp-default-rate" value="24.50" style="width:100px;" />
+                </div>
+                <div class="input-row">
+                  <span style="flex:1; color:var(--text-muted);">Standing Charge (p/day):</span>
+                  <input type="number" step="0.01" id="tariff-standing-p" value="60.00" style="width:100px;" />
+                </div>
+                <div class="input-row">
+                  <span style="flex:1; color:var(--text-muted);">Description:</span>
+                  <input type="text" id="imp-description" placeholder="Optional description (shown on dashboard)" style="width:240px; background:#090D16; color:var(--text-main); border:1px solid var(--border-bright); border-radius:6px; padding:5px 8px;" />
+                </div>
+                <div id="imp-windows-wrap">
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin:6px 0;">
+                    <span style="font-size:12px; color:var(--text-muted);">Time-of-Use Windows (optional):</span>
+                    <button class="btn" style="padding:3px 8px; font-size:11px;" onclick="addTariffWindow('imp')">+ Add Window</button>
+                  </div>
+                  <div id="imp-windows-list" style="display:flex; flex-direction:column; gap:6px;"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Export Tariff -->
+            <div style="border-top:1px solid var(--border); padding-top:12px; margin-top:12px;">
+              <div style="font-weight:600; color:#34D399; margin-bottom:8px;">⬆ Export Tariff (Solar / Grid Out)</div>
+              <div class="ctrl-group">
+                <div class="input-row">
+                  <span style="flex:1; color:var(--text-muted);">Source:</span>
+                  <select id="exp-mode" onchange="onTariffModeChange('exp')">
+                    <option value="octopus_api">Octopus Energy (Live API)</option>
+                    <option value="preset">UK Supplier Preset</option>
+                    <option value="custom">Custom Schedule</option>
+                  </select>
+                </div>
+                <div class="input-row" id="exp-octopus-row" style="display:none;">
+                  <span style="flex:1; color:var(--text-muted);">Octopus Product:</span>
+                  <select id="exp-octopus-product" style="max-width:250px;" onchange="onOctopusProductSelect('exp')"></select>
+                </div>
+                <div class="input-row" id="exp-preset-row">
+                  <span style="flex:1; color:var(--text-muted);">Supplier Plan:</span>
+                  <select id="exp-preset-select" style="max-width:250px;" onchange="applyTariffPreset('exp')"></select>
+                </div>
+                <div class="input-row">
+                  <span style="flex:1; color:var(--text-muted);">Default Export Rate (p/kWh):</span>
+                  <input type="number" step="0.01" id="exp-default-rate" value="15.00" style="width:100px;" />
+                </div>
+                <div class="input-row">
+                  <span style="flex:1; color:var(--text-muted);">Description:</span>
+                  <input type="text" id="exp-description" placeholder="Optional description (shown on dashboard)" style="width:240px; background:#090D16; color:var(--text-main); border:1px solid var(--border-bright); border-radius:6px; padding:5px 8px;" />
+                </div>
+                <div id="exp-windows-wrap">
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin:6px 0;">
+                    <span style="font-size:12px; color:var(--text-muted);">Time-of-Use Windows (optional):</span>
+                    <button class="btn" style="padding:3px 8px; font-size:11px;" onclick="addTariffWindow('exp')">+ Add Window</button>
+                  </div>
+                  <div id="exp-windows-list" style="display:flex; flex-direction:column; gap:6px;"></div>
+                </div>
+              </div>
+            </div>
+
+            <div style="margin-top:14px; padding:12px 14px; background:rgba(15,23,42,0.5); border:1px solid var(--border); border-radius:8px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:8px;">
+                <span style="font-size:13px; font-weight:600; color:var(--text-main);">Ofgem Price Cap Benchmark (Savings Comparison)</span>
+                <span id="cfg-cap-status" style="font-size:11px; color:var(--text-muted);">Ofgem Price Cap (Default)</span>
+              </div>
+              <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:center;">
+                <label style="font-size:12px; color:var(--text-muted);">Unit Rate (p/kWh):
+                  <input type="number" step="0.01" id="cfg-cap-rate" value="24.50" style="width:82px; margin-left:4px;" />
+                </label>
+                <label style="font-size:12px; color:var(--text-muted);">Standing (p/day):
+                  <input type="number" step="0.01" id="cfg-cap-sc" value="60.00" style="width:82px; margin-left:4px;" />
+                </label>
+                <label style="font-size:12px; color:var(--text-main); display:flex; align-items:center; gap:6px; cursor:pointer;">
+                  <input type="checkbox" id="cfg-cap-auto" checked />
+                  Auto-update from live UK SVT (Flexible Octopus)
+                </label>
+                <button class="btn" style="padding:4px 10px; font-size:12px;" onclick="syncPriceCapNow()">⟳ Update Price Cap Now</button>
+              </div>
+            </div>
+
+            <div style="display:flex; gap:8px; margin-top:14px; flex-wrap:wrap;">
+              <button class="btn primary" onclick="saveTariffConfigUI()">💾 Save &amp; Apply Tariffs</button>
+              <button class="btn" onclick="syncOctopusRatesNow()">⟳ Sync Octopus Rates</button>
+            </div>
+          </div>
+
+          <!-- Cost & Export Ledger (Days / Weeks / Months / Years / All Time) -->
+          <div class="panel">
+            <div class="panel-header" style="flex-wrap:wrap; gap:10px;">
+              <div>
+                <div class="panel-title" id="cost-ledger-title">Cost &amp; Export Ledger (Last 30 Days)</div>
+                <div class="panel-sub" id="cost-ledger-sub">Estimated import outgoings, export income, standing charge &amp; savings</div>
+              </div>
+              <div id="cost-period-buttons" style="display:flex; flex-wrap:wrap; gap:6px;">
+                <button class="btn primary" data-period="days" onclick="setCostLedgerPeriod('days', this)">Days (30d)</button>
+                <button class="btn" data-period="weeks" onclick="setCostLedgerPeriod('weeks', this)">Weeks</button>
+                <button class="btn" data-period="months" onclick="setCostLedgerPeriod('months', this)">Months</button>
+                <button class="btn" data-period="years" onclick="setCostLedgerPeriod('years', this)">Years</button>
+                <button class="btn" data-period="all" onclick="setCostLedgerPeriod('all', this)">All Time</button>
+              </div>
+            </div>
+            <div id="cost-period-summary-strip" style="display:flex; flex-wrap:wrap; gap:12px; margin-bottom:10px; padding:8px 12px; background:rgba(15,23,42,0.55); border:1px solid var(--border); border-radius:8px; font-size:12px;">
+              <span>Period: <strong id="cost-sum-days">—</strong></span>
+              <span>Import: <strong id="cost-sum-imp" style="color:#F87171;">—</strong></span>
+              <span>Export: <strong id="cost-sum-exp" style="color:#34D399;">—</strong></span>
+              <span>Standing: <strong id="cost-sum-sc">—</strong></span>
+              <span>Net: <strong id="cost-sum-net">—</strong></span>
+              <span>Avg/Day: <strong id="cost-sum-avg">—</strong></span>
+              <span>Saved: <strong id="cost-sum-sav" style="color:#FBBF24;">—</strong></span>
+              <span title="Estimated total savings vs Ofgem Price Cap (24.50p/kWh + 60p/day) for the same consumption without solar, battery, or export">vs Price Cap: <strong id="cost-sum-cap" style="color:#34D399;">—</strong></span>
+            </div>
+            <div class="table-wrap" style="max-height:520px; overflow:auto;">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Period</th>
+                    <th>Import (kWh)</th>
+                    <th>Export (kWh)</th>
+                    <th>Standing</th>
+                    <th>Imp Cost</th>
+                    <th>Exp Earn</th>
+                    <th>Net Cost</th>
+                    <th>Solar/Batt Saving</th>
+                    <th>Current Total</th>
+                  </tr>
+                </thead>
+                <tbody id="cost-daily-tbody">
+                  <tr><td colspan="9" style="text-align:center; color:var(--text-muted);">Loading cost ledger…</td></tr>
+                </tbody>
+                <tfoot id="cost-daily-tfoot"></tfoot>
+              </table>
+            </div>
           </div>
         </div>
       </section>
@@ -1614,6 +1856,8 @@
 
       if (tabId === 'history') {
         loadHistoryData();
+      } else if (tabId === 'costs') {
+        loadCostsTab();
       } else if (tabId === 'bms') {
         const b = getSelectedBattery();
         if (b) drawBmsCellsChart(b);
@@ -2859,12 +3103,564 @@
     }
 
     // =========================================================================
+    // Cost Monitoring & 3-Tier UK Tariff Engine
+    // =========================================================================
+    let _tariffPresetsCache = null;
+    let _octopusProductsCache = null;
+    let _lastCostIntradayData = null;
+
+    function _todayIso() {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    }
+
+    function shiftCostDate(deltaDays) {
+      const inp = document.getElementById('cost-date-input');
+      const base = inp.value ? new Date(inp.value + 'T12:00:00') : new Date();
+      base.setDate(base.getDate() + deltaDays);
+      inp.value = `${base.getFullYear()}-${String(base.getMonth() + 1).padStart(2, '0')}-${String(base.getDate()).padStart(2, '0')}`;
+      loadCostsTab();
+    }
+
+    async function refreshCostKpiCard() {
+      try {
+        const res = await fetch('/api/costs/summary?days=30');
+        if (!res.ok) return;
+        const data = await res.json();
+        const sym = data.currency_symbol || '£';
+        const sub = data.sub_unit_symbol || 'p';
+        const t = data.today || {};
+        const r = data.current_rates || {};
+        const net = Number(t.net_cost_gbp || 0);
+        const netSign = net < 0 ? '-' : '';
+        document.getElementById('kpi-cost-net').textContent = `${netSign}${sym}${Math.abs(net).toFixed(2)}`;
+        document.getElementById('kpi-cost-breakdown').textContent =
+          `In ${sym}${Number(t.import_cost_gbp || 0).toFixed(2)} | Out ${sym}${Number(t.export_income_gbp || 0).toFixed(2)}`;
+        document.getElementById('kpi-cost-rates').textContent =
+          `Imp ${Number(r.import_rate_p || 0).toFixed(1)}${sub} | Exp ${Number(r.export_rate_p || 0).toFixed(1)}${sub}`;
+      } catch (e) {
+        console.debug('Cost KPI refresh failed:', e);
+      }
+    }
+
+    async function ensureTariffMetadataLoaded() {
+      if (!_tariffPresetsCache) {
+        const res = await fetch('/api/tariffs/presets');
+        if (res.ok) {
+          _tariffPresetsCache = await res.json();
+          const regSel = document.getElementById('tariff-region');
+          regSel.innerHTML = '';
+          for (const [code, name] of Object.entries(_tariffPresetsCache.regions || {})) {
+            const opt = document.createElement('option');
+            opt.value = code;
+            opt.textContent = `${code} — ${name}`;
+            regSel.appendChild(opt);
+          }
+          for (const side of ['imp', 'exp']) {
+            const key = side === 'imp' ? 'import' : 'export';
+            const sel = document.getElementById(`${side}-preset-select`);
+            sel.innerHTML = '';
+            for (const p of (_tariffPresetsCache.presets?.[key] || [])) {
+              const opt = document.createElement('option');
+              opt.value = p.id;
+              opt.textContent = `${p.supplier} — ${p.name}`;
+              sel.appendChild(opt);
+            }
+          }
+        }
+      }
+    }
+
+    async function ensureOctopusProductsLoaded(force = false) {
+      if (_octopusProductsCache && !force) return _octopusProductsCache;
+      const res = await fetch(`/api/tariffs/octopus/products${force ? '?refresh=true' : ''}`);
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (!data.ok) return null;
+      _octopusProductsCache = data;
+      for (const side of ['imp', 'exp']) {
+        const list = side === 'imp' ? (data.import_products || []) : (data.export_products || []);
+        const sel = document.getElementById(`${side}-octopus-product`);
+        const prev = sel.value;
+        sel.innerHTML = '';
+        for (const p of list) {
+          const opt = document.createElement('option');
+          opt.value = p.code;
+          opt.textContent = `${p.display_name} (${p.code})`;
+          sel.appendChild(opt);
+        }
+        if (prev) sel.value = prev;
+      }
+      return data;
+    }
+
+    function onTariffModeChange(side) {
+      const mode = document.getElementById(`${side}-mode`).value;
+      document.getElementById(`${side}-octopus-row`).style.display = mode === 'octopus_api' ? 'flex' : 'none';
+      document.getElementById(`${side}-preset-row`).style.display = mode === 'preset' ? 'flex' : 'none';
+      document.getElementById(`${side}-windows-wrap`).style.display = mode === 'octopus_api' ? 'none' : 'block';
+      document.getElementById(`${side}-default-rate`).readOnly = (mode === 'octopus_api');
+      if (mode === 'octopus_api') {
+        ensureOctopusProductsLoaded().then(() => onOctopusProductSelect(side));
+      } else if (mode === 'preset') {
+        applyTariffPreset(side);
+      }
+      const usesOct = document.getElementById('imp-mode').value === 'octopus_api' ||
+                      document.getElementById('exp-mode').value === 'octopus_api';
+      document.getElementById('tariff-region').disabled = !usesOct;
+      document.getElementById('tariff-postcode').disabled = !usesOct;
+    }
+
+    function onTariffRegionChange() {
+      if (document.getElementById('imp-mode').value === 'octopus_api') onOctopusProductSelect('imp');
+      if (document.getElementById('exp-mode').value === 'octopus_api') onOctopusProductSelect('exp');
+    }
+
+    async function onOctopusProductSelect(side) {
+      const prodCode = document.getElementById(`${side}-octopus-product`).value;
+      const region = document.getElementById('tariff-region').value || 'H';
+      if (!prodCode) return;
+      try {
+        const res = await fetch(`/api/tariffs/octopus/product-rates?product_code=${encodeURIComponent(prodCode)}&region=${encodeURIComponent(region)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.ok) {
+          if (data.current_rate_p !== null && data.current_rate_p !== undefined) {
+            document.getElementById(`${side}-default-rate`).value = Number(data.current_rate_p).toFixed(2);
+          }
+          if (side === 'imp' && data.standing_charge_p !== null && data.standing_charge_p !== undefined) {
+            document.getElementById('tariff-standing-p').value = Number(data.standing_charge_p).toFixed(2);
+          }
+        }
+      } catch (e) {
+        console.debug('Octopus rate lookup failed:', e);
+      }
+    }
+
+    function applyTariffPreset(side) {
+      if (!_tariffPresetsCache) return;
+      const key = side === 'imp' ? 'import' : 'export';
+      const id = document.getElementById(`${side}-preset-select`).value;
+      const preset = (_tariffPresetsCache.presets?.[key] || []).find(p => p.id === id);
+      if (!preset) return;
+      document.getElementById(`${side}-default-rate`).value = Number(preset.default_rate_p || 0).toFixed(2);
+      if (side === 'imp' && preset.standing_charge_p !== undefined) {
+        document.getElementById('tariff-standing-p').value = Number(preset.standing_charge_p).toFixed(2);
+      }
+      renderTariffWindows(side, preset.windows || []);
+    }
+
+    function renderTariffWindows(side, windows) {
+      const wrap = document.getElementById(`${side}-windows-list`);
+      wrap.innerHTML = '';
+      (windows || []).forEach((w, idx) => {
+        const row = document.createElement('div');
+        row.className = 'tariff-win-row';
+        row.style.cssText = 'display:flex; gap:6px; align-items:center; flex-wrap:wrap;';
+        row.innerHTML = `
+          <input type="time" class="tw-start" value="${w.start || '00:00'}" style="width:92px;" />
+          <span style="color:var(--text-muted);">to</span>
+          <input type="time" class="tw-end" value="${w.end || '07:00'}" style="width:92px;" />
+          <input type="number" step="0.01" class="tw-rate" value="${Number(w.rate_p ?? 7.0).toFixed(2)}" style="width:74px;" title="p/kWh" />
+          <input type="text" class="tw-label" value="${(w.label || '').replace(/"/g, '&quot;')}" placeholder="Label" style="flex:1; min-width:75px; background:#090D16; color:var(--text-main); border:1px solid var(--border-bright); border-radius:6px; padding:4px 6px;" />
+          <button class="btn" style="padding:3px 7px; font-size:11px;" onclick="this.parentElement.remove()">✕</button>
+        `;
+        wrap.appendChild(row);
+      });
+    }
+
+    function addTariffWindow(side) {
+      const existing = readTariffWindows(side);
+      existing.push({ start: '00:00', end: '05:00', rate_p: 7.5, label: 'Off-Peak' });
+      renderTariffWindows(side, existing);
+    }
+
+    function readTariffWindows(side) {
+      const rows = document.querySelectorAll(`#${side}-windows-list .tariff-win-row`);
+      return Array.from(rows).map(r => ({
+        start: r.querySelector('.tw-start').value || '00:00',
+        end: r.querySelector('.tw-end').value || '07:00',
+        rate_p: parseFloat(r.querySelector('.tw-rate').value || '0') || 0,
+        label: r.querySelector('.tw-label').value || '',
+      }));
+    }
+
+    async function loadTariffConfigUI() {
+      await ensureTariffMetadataLoaded();
+      const res = await fetch('/api/tariffs/config');
+      if (!res.ok) return;
+      const cfg = await res.json();
+      document.getElementById('tariff-region').value = cfg.region || 'H';
+      document.getElementById('tariff-postcode').value = cfg.postcode || '';
+      document.getElementById('tariff-standing-p').value = Number(cfg.standing_charge_p ?? 60.0).toFixed(2);
+      document.getElementById('tariff-currency').value = cfg.currency_symbol || '£';
+      document.getElementById('cfg-cap-rate').value = Number(cfg.price_cap_rate_p ?? 24.50).toFixed(2);
+      document.getElementById('cfg-cap-sc').value = Number(cfg.price_cap_standing_charge_p ?? 60.0).toFixed(2);
+      document.getElementById('cfg-cap-auto').checked = cfg.price_cap_auto_sync !== false;
+      const capSrc = cfg.price_cap_source || 'Ofgem Price Cap (Default)';
+      const capTs = cfg.price_cap_updated_at ? ` • Updated ${cfg.price_cap_updated_at}` : '';
+      document.getElementById('cfg-cap-status').textContent = `${capSrc}${capTs}`;
+
+      const syncPill = document.getElementById('tariff-sync-pill');
+      if (cfg.last_octopus_sync) {
+        syncPill.textContent = `Synced: ${cfg.last_octopus_sync.replace('T', ' ')}`;
+        syncPill.className = 'pill ok';
+      } else {
+        syncPill.textContent = 'Preset / Custom';
+        syncPill.className = 'pill';
+      }
+
+      if (cfg.import_tariff?.mode === 'octopus_api' || cfg.export_tariff?.mode === 'octopus_api') {
+        await ensureOctopusProductsLoaded();
+      }
+
+      for (const [side, sideCfg] of [['imp', cfg.import_tariff], ['exp', cfg.export_tariff]]) {
+        if (!sideCfg) continue;
+        document.getElementById(`${side}-mode`).value = sideCfg.mode || 'preset';
+        onTariffModeChange(side);
+        if (sideCfg.preset_id) document.getElementById(`${side}-preset-select`).value = sideCfg.preset_id;
+        if (sideCfg.octopus_product_code) document.getElementById(`${side}-octopus-product`).value = sideCfg.octopus_product_code;
+        document.getElementById(`${side}-default-rate`).value = Number(sideCfg.default_rate_p ?? 0).toFixed(2);
+        document.getElementById(`${side}-description`).value = sideCfg.description || '';
+        renderTariffWindows(side, sideCfg.windows || []);
+      }
+    }
+
+    async function lookupTariffPostcode() {
+      const pc = document.getElementById('tariff-postcode').value.trim();
+      if (!pc) { showToast('Enter a UK postcode first'); return; }
+      const res = await fetch(`/api/tariffs/octopus/lookup-postcode?postcode=${encodeURIComponent(pc)}`);
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        document.getElementById('tariff-region').value = data.region;
+        showToast(`Detected Region ${data.region} — ${data.region_name}`);
+      } else {
+        showToast(data.error || 'Postcode lookup failed');
+      }
+    }
+
+    function _buildSidePayload(side) {
+      const mode = document.getElementById(`${side}-mode`).value;
+      const presetSel = document.getElementById(`${side}-preset-select`);
+      const octSel = document.getElementById(`${side}-octopus-product`);
+      let label = 'Custom Tariff';
+      if (mode === 'octopus_api' && octSel.selectedOptions[0]) {
+        label = octSel.selectedOptions[0].textContent;
+      } else if (mode === 'preset' && presetSel.selectedOptions[0]) {
+        label = presetSel.selectedOptions[0].textContent;
+      }
+      return {
+        mode,
+        preset_id: mode === 'preset' ? presetSel.value : '',
+        label,
+        description: (document.getElementById(`${side}-description`).value || '').trim(),
+        octopus_product_code: mode === 'octopus_api' ? octSel.value : '',
+        octopus_tariff_code: '',
+        default_rate_p: parseFloat(document.getElementById(`${side}-default-rate`).value || '0') || 0,
+        windows: mode === 'octopus_api' ? [] : readTariffWindows(side),
+      };
+    }
+
+    async function saveTariffConfigUI() {
+      const cur = document.getElementById('tariff-currency').value || '£';
+      const subMap = { '£': 'p', '€': 'c', '$': '¢' };
+      const payload = {
+        currency_symbol: cur,
+        sub_unit_symbol: subMap[cur] || 'p',
+        region: document.getElementById('tariff-region').value || 'H',
+        postcode: document.getElementById('tariff-postcode').value.trim().toUpperCase(),
+        standing_charge_p: parseFloat(document.getElementById('tariff-standing-p').value || '0') || 0,
+        import_tariff: _buildSidePayload('imp'),
+        export_tariff: _buildSidePayload('exp'),
+        price_cap_rate_p: parseFloat(document.getElementById('cfg-cap-rate').value || '24.50') || 24.50,
+        price_cap_standing_charge_p: parseFloat(document.getElementById('cfg-cap-sc').value || '60.00') || 60.00,
+        price_cap_auto_sync: !!document.getElementById('cfg-cap-auto').checked,
+      };
+      const res = await fetch('/api/tariffs/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        if (data.sync_error) {
+          showToast(`Saved, but Octopus sync failed: ${data.sync_error}`);
+        } else {
+          showToast('Tariff configuration saved & applied');
+        }
+        await loadCostsTab();
+      } else {
+        showToast('Failed to save tariff configuration');
+      }
+    }
+
+    async function syncOctopusRatesNow() {
+      const res = await fetch('/api/tariffs/octopus/sync', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        showToast('Octopus Energy rates synced');
+        await loadCostsTab();
+      } else {
+        showToast(data.error || 'Octopus sync failed');
+      }
+    }
+
+    async function syncPriceCapNow() {
+      const res = await fetch('/api/tariffs/price-cap/sync', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        showToast(`Price cap updated: ${Number(data.price_cap_rate_p).toFixed(2)}p/kWh, ${Number(data.price_cap_standing_charge_p).toFixed(2)}p/day`);
+        await loadCostsTab();
+      } else {
+        showToast(data.error || 'Price cap sync failed');
+      }
+    }
+
+    let _costLedgerPeriod = 'days';
+
+    function setCostLedgerPeriod(period, btnEl) {
+      _costLedgerPeriod = period || 'days';
+      const wrap = document.getElementById('cost-period-buttons');
+      if (wrap) {
+        wrap.querySelectorAll('button').forEach(b => b.classList.toggle('primary', b === btnEl));
+      }
+      loadCostLedgerOnly();
+    }
+
+    function _renderCostLedger(s) {
+      const sym = s.currency_symbol || '£';
+      const dObj = s.daily || {};
+      const tot = dObj.totals || {};
+      const rows = dObj.rows || dObj.days || [];
+      const titles = {
+        days: 'Cost & Export Ledger (Last 30 Days)',
+        weeks: 'Weekly Cost & Export Ledger (All Recorded History)',
+        months: 'Monthly Cost & Export Ledger (All Recorded History)',
+        years: 'Annual Cost & Export Ledger (All Recorded History)',
+        all: 'All-Time Cost & Export Summary',
+      };
+      const titleEl = document.getElementById('cost-ledger-title');
+      if (titleEl) titleEl.textContent = titles[_costLedgerPeriod] || titles.days;
+
+      const nDays = Number(tot.days_count ?? (dObj.days ? dObj.days.length : 0));
+      const netVal = Number(tot.net_cost_gbp || 0);
+      const avgVal = Number(tot.avg_daily_net_gbp ?? (nDays ? netVal / nDays : 0));
+      const fmtMoney = (v) => `${v < 0 ? '-' : ''}${sym}${Math.abs(Number(v || 0)).toFixed(2)}`;
+
+      document.getElementById('cost-sum-days').textContent = `${nDays} day${nDays === 1 ? '' : 's'}`;
+      document.getElementById('cost-sum-imp').textContent = `${Number(tot.import_kwh || 0).toFixed(1)} kWh (${sym}${Number(tot.import_cost_gbp || 0).toFixed(2)})`;
+      document.getElementById('cost-sum-exp').textContent = `${Number(tot.export_kwh || 0).toFixed(1)} kWh (${sym}${Number(tot.export_income_gbp || 0).toFixed(2)})`;
+      document.getElementById('cost-sum-sc').textContent = `${sym}${Number(tot.standing_charge_gbp || 0).toFixed(2)}`;
+      document.getElementById('cost-sum-net').textContent = fmtMoney(netVal);
+      document.getElementById('cost-sum-avg').textContent = `${fmtMoney(avgVal)}/d`;
+      document.getElementById('cost-sum-sav').textContent = `${sym}${Number(tot.savings_gbp || 0).toFixed(2)}`;
+      const capEl = document.getElementById('cost-sum-cap');
+      if (capEl) {
+        const savCap = Number(tot.savings_vs_price_cap_gbp || 0);
+        const capCost = Number(tot.price_cap_cost_gbp || 0);
+        capEl.textContent = `${savCap >= 0 ? '+' : '-'}${sym}${Math.abs(savCap).toFixed(2)} (cap ${sym}${capCost.toFixed(2)})`;
+        capEl.style.color = savCap >= 0 ? '#34D399' : '#F87171';
+      }
+
+      const tbody = document.getElementById('cost-daily-tbody');
+      const tfoot = document.getElementById('cost-daily-tfoot');
+      if (!rows.length) {
+        tbody.innerHTML = '<tr><td colspan="9" style="text-align:center; color:var(--text-muted);">No history recorded yet.</td></tr>';
+        if (tfoot) tfoot.innerHTML = '';
+      } else {
+        // Compute cumulative running Net Cost from oldest row up to each row
+        const runningTotals = new Array(rows.length);
+        let cum = 0;
+        for (let i = rows.length - 1; i >= 0; i--) {
+          cum += Number(rows[i].net_cost_gbp || 0);
+          runningTotals[i] = cum;
+        }
+        tbody.innerHTML = rows.map((d, idx) => {
+          const baseLabel = d.label || d.date_str || '—';
+          const dc = d.days_count ?? 1;
+          const periodLabel = dc > 1 && _costLedgerPeriod !== 'all' ? `${baseLabel} (${dc}d)` : baseLabel;
+          const rNet = Number(d.net_cost_gbp || 0);
+          const rCum = runningTotals[idx];
+          return `
+            <tr>
+              <td style="font-weight:500;">${periodLabel}</td>
+              <td>${Number(d.import_kwh).toFixed(2)}</td>
+              <td>${Number(d.export_kwh).toFixed(2)}</td>
+              <td>${sym}${Number(d.standing_charge_gbp).toFixed(2)}</td>
+              <td style="color:#F87171;">${sym}${Number(d.import_cost_gbp).toFixed(2)}</td>
+              <td style="color:#34D399;">${sym}${Number(d.export_income_gbp).toFixed(2)}</td>
+              <td style="font-weight:600;">${fmtMoney(rNet)}</td>
+              <td style="color:#FBBF24;">${sym}${Number(d.savings_gbp).toFixed(2)}</td>
+              <td style="font-weight:600;">${fmtMoney(rCum)}</td>
+            </tr>
+          `;
+        }).join('');
+        if (tfoot) {
+          tfoot.innerHTML = `
+            <tr style="position:sticky; bottom:0; background:rgba(15,23,42,0.96); border-top:2px solid var(--border); font-weight:700;">
+              <td>Total (${nDays}d)</td>
+              <td>${Number(tot.import_kwh || 0).toFixed(2)}</td>
+              <td>${Number(tot.export_kwh || 0).toFixed(2)}</td>
+              <td>${sym}${Number(tot.standing_charge_gbp || 0).toFixed(2)}</td>
+              <td style="color:#F87171;">${sym}${Number(tot.import_cost_gbp || 0).toFixed(2)}</td>
+              <td style="color:#34D399;">${sym}${Number(tot.export_income_gbp || 0).toFixed(2)}</td>
+              <td>${fmtMoney(netVal)}</td>
+              <td style="color:#FBBF24;">${sym}${Number(tot.savings_gbp || 0).toFixed(2)}</td>
+              <td>${fmtMoney(cum)}</td>
+            </tr>
+          `;
+        }
+      }
+    }
+
+    async function loadCostLedgerOnly() {
+      const daysParam = _costLedgerPeriod === 'days' ? 30 : 0;
+      const res = await fetch(`/api/costs/summary?days=${daysParam}&period=${encodeURIComponent(_costLedgerPeriod)}`);
+      if (res.ok) {
+        const s = await res.json();
+        _renderCostLedger(s);
+      }
+    }
+
+    async function loadCostsTab() {
+      const dateInp = document.getElementById('cost-date-input');
+      if (!dateInp.value) dateInp.value = _todayIso();
+      const targetDate = dateInp.value;
+
+      await loadTariffConfigUI();
+
+      const daysParam = _costLedgerPeriod === 'days' ? 30 : 0;
+      const [sumRes, intraRes] = await Promise.all([
+        fetch(`/api/costs/summary?days=${daysParam}&period=${encodeURIComponent(_costLedgerPeriod)}`),
+        fetch(`/api/costs/intraday?date=${encodeURIComponent(targetDate)}`),
+      ]);
+
+      if (sumRes.ok) {
+        const s = await sumRes.json();
+        const sym = s.currency_symbol || '£';
+        const td = s.today || {};
+        const net = Number(td.net_cost_gbp || 0);
+        document.getElementById('cost-today-net').textContent = `${net < 0 ? '-' : ''}${sym}${Math.abs(net).toFixed(2)}`;
+        document.getElementById('cost-today-sc').textContent = `Standing: ${sym}${Number(td.standing_charge_gbp || 0).toFixed(2)}/day`;
+        document.getElementById('cost-today-imp').textContent = `${sym}${Number(td.import_cost_gbp || 0).toFixed(2)}`;
+        document.getElementById('cost-today-imp-kwh').textContent = `${Number(td.import_kwh || 0).toFixed(2)} kWh imported`;
+        const cr = s.current_rates || {};
+        document.getElementById('cost-today-imp-plan').textContent = cr.import_description || cr.import_label || '—';
+        document.getElementById('cost-today-exp').textContent = `${sym}${Number(td.export_income_gbp || 0).toFixed(2)}`;
+        document.getElementById('cost-today-exp-kwh').textContent = `${Number(td.export_kwh || 0).toFixed(2)} kWh exported`;
+        document.getElementById('cost-today-exp-plan').textContent = cr.export_description || cr.export_label || '—';
+        document.getElementById('cost-today-sav').textContent = `${sym}${Number(td.savings_gbp || 0).toFixed(2)}`;
+
+        const tot30 = s.daily?.totals || {};
+        const spanLabel = _costLedgerPeriod === 'days' ? '30d Net' : 'Period Net';
+        document.getElementById('cost-30d-summary').textContent =
+          `${spanLabel}: ${sym}${Number(tot30.net_cost_gbp || 0).toFixed(2)} | Saved: ${sym}${Number(tot30.savings_gbp || 0).toFixed(2)}`;
+
+        _renderCostLedger(s);
+        refreshCostKpiCard();
+      }
+
+      if (intraRes.ok) {
+        const intra = await intraRes.json();
+        _lastCostIntradayData = intra;
+        drawCostIntradayChart(intra);
+      }
+    }
+
+    function drawCostIntradayChart(data) {
+      const canvas = document.getElementById('costIntradayCanvas');
+      if (!canvas || !data || !data.buckets) return;
+      const dpr = window.devicePixelRatio || 1;
+      const w = canvas.parentElement.clientWidth || 720;
+      const h = 260;
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      canvas.style.width = w + 'px';
+      canvas.style.height = h + 'px';
+      const ctx = canvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+      ctx.clearRect(0, 0, w, h);
+
+      const pad = { l: 48, r: 46, t: 16, b: 28 };
+      const cw = w - pad.l - pad.r;
+      const ch = h - pad.t - pad.b;
+      const buckets = data.buckets;
+      const sub = data.sub_unit_symbol || 'p';
+
+      const maxCost = Math.max(5, ...buckets.map(b => Math.max(b.import_cost_p, b.export_income_p)));
+      const maxRate = Math.max(10, ...buckets.map(b => b.import_rate_p));
+
+      // Grid lines
+      ctx.strokeStyle = 'rgba(148,163,184,0.12)';
+      ctx.lineWidth = 1;
+      ctx.font = '11px system-ui, sans-serif';
+      ctx.fillStyle = '#94A3B8';
+      for (let i = 0; i <= 4; i++) {
+        const y = pad.t + (ch * i) / 4;
+        ctx.beginPath();
+        ctx.moveTo(pad.l, y);
+        ctx.lineTo(pad.l + cw, y);
+        ctx.stroke();
+        const val = (maxCost * (4 - i)) / 4;
+        ctx.textAlign = 'right';
+        ctx.fillText(`${val.toFixed(0)}${sub}`, pad.l - 6, y + 4);
+      }
+
+      const slotW = cw / buckets.length;
+      const barW = Math.max(2, slotW * 0.36);
+
+      buckets.forEach((b, i) => {
+        const x0 = pad.l + i * slotW;
+        if (b.import_cost_p > 0) {
+          const bh = (b.import_cost_p / maxCost) * ch;
+          ctx.fillStyle = '#EF4444';
+          ctx.fillRect(x0 + 1, pad.t + ch - bh, barW, bh);
+        }
+        if (b.export_income_p > 0) {
+          const bh = (b.export_income_p / maxCost) * ch;
+          ctx.fillStyle = '#10B981';
+          ctx.fillRect(x0 + 1 + barW + 1, pad.t + ch - bh, barW, bh);
+        }
+        if (i % 6 === 0) {
+          ctx.fillStyle = '#94A3B8';
+          ctx.textAlign = 'center';
+          ctx.fillText(b.time, x0 + slotW / 2, h - 8);
+        }
+      });
+
+      // Overlay import rate step-line (amber) with vertical transitions at half-hour boundaries
+      ctx.strokeStyle = '#F59E0B';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      buckets.forEach((b, i) => {
+        const xLeft = pad.l + i * slotW;
+        const xRight = pad.l + (i + 1) * slotW;
+        const y = pad.t + ch - (b.import_rate_p / maxRate) * ch;
+        if (i === 0) {
+          ctx.moveTo(xLeft, y);
+        } else {
+          ctx.lineTo(xLeft, y);
+        }
+        ctx.lineTo(xRight, y);
+      });
+      ctx.stroke();
+
+      // Right axis rate labels
+      ctx.fillStyle = '#F59E0B';
+      ctx.textAlign = 'left';
+      ctx.fillText(`${maxRate.toFixed(0)}${sub}/kWh`, pad.l + cw + 4, pad.t + 10);
+      ctx.fillText(`0${sub}`, pad.l + cw + 4, pad.t + ch);
+    }
+
+    // =========================================================================
     // Boot
     // =========================================================================
     window.addEventListener('resize', () => {
       drawLiveTimelineChart();
       if (document.getElementById('tab-history').classList.contains('active')) {
         loadHistoryData();
+      } else if (document.getElementById('tab-costs').classList.contains('active')) {
+        if (_lastCostIntradayData) drawCostIntradayChart(_lastCostIntradayData);
       } else if (document.getElementById('tab-bms').classList.contains('active')) {
         if (latestPayload) drawBmsCellsChart(latestPayload.battery);
         loadBmsHistoryChart();
@@ -2875,6 +3671,8 @@
 
     connectWebSocket();
     fetchSnapshotFallback();
+    refreshCostKpiCard();
+    setInterval(refreshCostKpiCard, 60000);
     requestAnimationFrame(renderPowerFlowLoop);
 
     const initialTab = new URLSearchParams(window.location.search).get('tab');

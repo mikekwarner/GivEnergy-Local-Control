@@ -30,6 +30,24 @@ from givenergy_web import __version__ as APP_VERSION
 from givenergy_web.config import PropertyConfig, _detect_local_ipv4, load_config, save_config, scan_lan_for_devices
 from givenergy_web.database import HistoricDatabase
 from givenergy_web.poller import AsyncPlantPoller
+from givenergy_web.tariffs import (
+    UK_GSP_REGIONS,
+    UK_TARIFF_PRESETS,
+    TariffConfig,
+    TariffRateCache,
+    TariffSideConfig,
+    aggregate_cost_periods,
+    calculate_daily_costs,
+    calculate_intraday_costs,
+    fetch_octopus_product_summary,
+    fetch_octopus_products,
+    get_current_rates,
+    load_tariff_config,
+    lookup_gsp_by_postcode,
+    save_tariff_config,
+    sync_octopus_tariff,
+    sync_price_cap,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -37,8 +55,13 @@ DEFAULT_DB_PATH = Path(os.environ.get("GIVENERGY_DB_PATH", str(BASE_DIR.parent /
 DEFAULT_CONFIG_PATH = Path(
     os.environ.get("GIVENERGY_CONFIG_PATH", str(DEFAULT_DB_PATH.parent / "property_config.json"))
 )
+DEFAULT_TARIFF_CONFIG_PATH = Path(
+    os.environ.get("GIVENERGY_TARIFF_CONFIG_PATH", str(DEFAULT_DB_PATH.parent / "tariff_config.json"))
+)
 DB_FLUSH_INTERVAL_S = float(os.environ.get("GIVENERGY_DB_FLUSH_INTERVAL", "60.0"))
 property_config = load_config(DEFAULT_CONFIG_PATH)
+tariff_config = load_tariff_config(DEFAULT_TARIFF_CONFIG_PATH)
+tariff_cache = TariffRateCache(DEFAULT_DB_PATH)
 
 
 class WebSocketHub:
@@ -83,12 +106,60 @@ poller = AsyncPlantPoller(
 )
 
 
+async def _sync_configured_octopus_rates() -> dict[str, Any]:
+    """Sync any configured Octopus API tariffs into the local SQLite rate cache."""
+    global tariff_config
+    synced: dict[str, Any] = {}
+    if tariff_config.import_tariff.mode == "octopus_api" and tariff_config.import_tariff.octopus_product_code:
+        res = await asyncio.to_thread(
+            sync_octopus_tariff,
+            tariff_cache,
+            tariff_config.import_tariff.octopus_product_code,
+            tariff_config.region,
+        )
+        tariff_config.import_tariff.octopus_tariff_code = res["tariff_code"]
+        tariff_config.import_tariff.default_rate_p = res["current_rate_p"]
+        if res.get("standing_charge_p") is not None:
+            tariff_config.standing_charge_p = float(res["standing_charge_p"])
+        synced["import"] = res
+    if tariff_config.export_tariff.mode == "octopus_api" and tariff_config.export_tariff.octopus_product_code:
+        res = await asyncio.to_thread(
+            sync_octopus_tariff,
+            tariff_cache,
+            tariff_config.export_tariff.octopus_product_code,
+            tariff_config.region,
+        )
+        tariff_config.export_tariff.octopus_tariff_code = res["tariff_code"]
+        tariff_config.export_tariff.default_rate_p = res["current_rate_p"]
+        synced["export"] = res
+    if tariff_config.price_cap_auto_sync:
+        try:
+            synced["price_cap"] = await asyncio.to_thread(sync_price_cap, tariff_config)
+        except Exception:
+            pass
+    if synced:
+        tariff_config.last_octopus_sync = time.strftime("%Y-%m-%dT%H:%M:%S")
+        save_tariff_config(DEFAULT_TARIFF_CONFIG_PATH, tariff_config)
+    return synced
+
+
+async def _octopus_periodic_sync_loop() -> None:
+    while True:
+        try:
+            await _sync_configured_octopus_rates()
+        except Exception:
+            pass
+        await asyncio.sleep(6 * 3600)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await poller.start()
+    sync_task = asyncio.create_task(_octopus_periodic_sync_loop())
     try:
         yield
     finally:
+        sync_task.cancel()
         await poller.stop()
 
 
@@ -406,6 +477,190 @@ async def api_save_config(req: PropertyConfigRequest):
     resp_cfg = asdict(cfg)
     resp_cfg.pop("api_token", None)
     return JSONResponse({"ok": True, "config": resp_cfg})
+
+
+class TariffSideRequest(BaseModel):
+    mode: str = "preset"
+    preset_id: str = ""
+    label: str = "Standard Variable Tariff (Flat)"
+    description: str = ""
+    octopus_product_code: str = ""
+    octopus_tariff_code: str = ""
+    default_rate_p: float = 24.5
+    windows: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class TariffConfigRequest(BaseModel):
+    currency_symbol: str = "£"
+    sub_unit_symbol: str = "p"
+    region: str = "H"
+    postcode: str = ""
+    standing_charge_p: float = 60.0
+    import_tariff: TariffSideRequest
+    export_tariff: TariffSideRequest
+    price_cap_rate_p: float | None = None
+    price_cap_standing_charge_p: float | None = None
+    price_cap_auto_sync: bool | None = None
+
+
+@app.get("/api/tariffs/presets")
+async def api_tariff_presets():
+    return JSONResponse({"regions": UK_GSP_REGIONS, "presets": UK_TARIFF_PRESETS})
+
+
+@app.get("/api/tariffs/config")
+async def api_get_tariff_config():
+    data = asdict(tariff_config)
+    data["current_rates"] = await asyncio.to_thread(get_current_rates, tariff_config, tariff_cache)
+    return JSONResponse(data)
+
+
+@app.post("/api/tariffs/config")
+async def api_save_tariff_config(req: TariffConfigRequest):
+    global tariff_config
+    region = req.region.strip().upper()
+    if region not in UK_GSP_REGIONS:
+        region = "H"
+    tariff_config = TariffConfig(
+        currency_symbol=req.currency_symbol.strip() or "£",
+        sub_unit_symbol=req.sub_unit_symbol.strip() or "p",
+        region=region,
+        postcode=req.postcode.strip().upper(),
+        standing_charge_p=float(req.standing_charge_p),
+        import_tariff=TariffSideConfig(
+            mode=req.import_tariff.mode,
+            preset_id=req.import_tariff.preset_id,
+            label=req.import_tariff.label.strip() or "Import Tariff",
+            description=req.import_tariff.description.strip(),
+            octopus_product_code=req.import_tariff.octopus_product_code.strip(),
+            octopus_tariff_code=req.import_tariff.octopus_tariff_code.strip(),
+            default_rate_p=float(req.import_tariff.default_rate_p),
+            windows=req.import_tariff.windows,
+        ),
+        export_tariff=TariffSideConfig(
+            mode=req.export_tariff.mode,
+            preset_id=req.export_tariff.preset_id,
+            label=req.export_tariff.label.strip() or "Export Tariff",
+            description=req.export_tariff.description.strip(),
+            octopus_product_code=req.export_tariff.octopus_product_code.strip(),
+            octopus_tariff_code=req.export_tariff.octopus_tariff_code.strip(),
+            default_rate_p=float(req.export_tariff.default_rate_p),
+            windows=req.export_tariff.windows,
+        ),
+        last_octopus_sync=tariff_config.last_octopus_sync,
+        price_cap_rate_p=float(req.price_cap_rate_p) if req.price_cap_rate_p is not None else tariff_config.price_cap_rate_p,
+        price_cap_standing_charge_p=float(req.price_cap_standing_charge_p) if req.price_cap_standing_charge_p is not None else tariff_config.price_cap_standing_charge_p,
+        price_cap_auto_sync=bool(req.price_cap_auto_sync) if req.price_cap_auto_sync is not None else tariff_config.price_cap_auto_sync,
+        price_cap_source="Manual Override" if req.price_cap_auto_sync is False else tariff_config.price_cap_source,
+        price_cap_updated_at=time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()) if req.price_cap_auto_sync is False else tariff_config.price_cap_updated_at,
+    )
+    save_tariff_config(DEFAULT_TARIFF_CONFIG_PATH, tariff_config)
+    sync_info: dict[str, Any] = {}
+    sync_error: str | None = None
+    try:
+        sync_info = await _sync_configured_octopus_rates()
+    except Exception as exc:
+        sync_error = str(exc)
+
+    resp = asdict(tariff_config)
+    resp["current_rates"] = await asyncio.to_thread(get_current_rates, tariff_config, tariff_cache)
+    return JSONResponse({"ok": True, "config": resp, "synced": sync_info, "sync_error": sync_error})
+
+
+@app.post("/api/tariffs/price-cap/sync")
+async def api_sync_price_cap():
+    try:
+        res = await asyncio.to_thread(sync_price_cap, tariff_config)
+        save_tariff_config(DEFAULT_TARIFF_CONFIG_PATH, tariff_config)
+        return JSONResponse({"ok": True, **res})
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
+
+
+@app.get("/api/tariffs/octopus/products")
+async def api_octopus_products(refresh: bool = Query(default=False)):
+    try:
+        prods = await asyncio.to_thread(fetch_octopus_products, refresh)
+        return JSONResponse({"ok": True, **prods})
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
+
+
+@app.get("/api/tariffs/octopus/product-rates")
+async def api_octopus_product_rates(
+    product_code: str = Query(..., min_length=2),
+    region: str = Query(default="H"),
+):
+    try:
+        reg = region.strip().upper()
+        if reg not in UK_GSP_REGIONS:
+            reg = "H"
+        info = await asyncio.to_thread(fetch_octopus_product_summary, product_code.strip(), reg)
+        return JSONResponse({"ok": True, **info})
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
+
+
+@app.get("/api/tariffs/octopus/lookup-postcode")
+async def api_octopus_lookup_postcode(postcode: str = Query(..., min_length=2)):
+    try:
+        region = await asyncio.to_thread(lookup_gsp_by_postcode, postcode)
+        return JSONResponse({"ok": True, "region": region, "region_name": UK_GSP_REGIONS.get(region, region)})
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+
+@app.post("/api/tariffs/octopus/sync")
+async def api_octopus_sync():
+    try:
+        synced = await _sync_configured_octopus_rates()
+        rates = await asyncio.to_thread(get_current_rates, tariff_config, tariff_cache)
+        return JSONResponse({"ok": True, "synced": synced, "current_rates": rates, "last_sync": tariff_config.last_octopus_sync})
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
+
+
+@app.get("/api/costs/summary")
+async def api_costs_summary(
+    days: int = Query(default=30, ge=0, le=36500),
+    period: str = Query(default="days", pattern="^(days|weeks|months|years|all)$"),
+):
+    current_rates = await asyncio.to_thread(get_current_rates, tariff_config, tariff_cache)
+    daily = await asyncio.to_thread(calculate_daily_costs, db, tariff_config, tariff_cache, days)
+    daily["period"] = period
+    daily["rows"] = aggregate_cost_periods(daily["days"], period)
+    today_str = time.strftime("%Y-%m-%d")
+    today_row = next((d for d in daily["days"] if d["date_str"] == today_str), None)
+    if today_row is None:
+        intraday = await asyncio.to_thread(calculate_intraday_costs, db, tariff_config, tariff_cache, today_str)
+        today_totals = intraday["totals"]
+        today_totals["savings_gbp"] = 0.0
+    else:
+        today_totals = {
+            "import_kwh": today_row["import_kwh"],
+            "export_kwh": today_row["export_kwh"],
+            "import_cost_gbp": today_row["import_cost_gbp"],
+            "export_income_gbp": today_row["export_income_gbp"],
+            "standing_charge_gbp": today_row["standing_charge_gbp"],
+            "net_cost_gbp": today_row["net_cost_gbp"],
+            "savings_gbp": today_row["savings_gbp"],
+        }
+    return JSONResponse({
+        "currency_symbol": tariff_config.currency_symbol,
+        "sub_unit_symbol": tariff_config.sub_unit_symbol,
+        "region": tariff_config.region,
+        "current_rates": current_rates,
+        "today": today_totals,
+        "daily": daily,
+    })
+
+
+@app.get("/api/costs/intraday")
+async def api_costs_intraday(date: str | None = Query(default=None, description="YYYY-MM-DD")):
+    data = await asyncio.to_thread(calculate_intraday_costs, db, tariff_config, tariff_cache, date)
+    data["currency_symbol"] = tariff_config.currency_symbol
+    data["sub_unit_symbol"] = tariff_config.sub_unit_symbol
+    return JSONResponse(data)
 
 
 class TokenVerifyRequest(BaseModel):

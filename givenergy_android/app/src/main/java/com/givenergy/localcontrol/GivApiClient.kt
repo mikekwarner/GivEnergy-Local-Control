@@ -104,6 +104,66 @@ class GivApiClient {
         }
     }
 
+    fun fetchCostSummary(days: Int = 30, period: String = "days"): JSONObject? {
+        if (activeBaseUrl.isBlank()) return null
+        val req = buildAuthorizedRequest("/api/costs/summary?days=$days&period=$period").get().build()
+        return apiHttp.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) return null
+            val body = resp.body?.string() ?: return null
+            JSONObject(body)
+        }
+    }
+
+    fun fetchTariffPresets(): JSONObject? {
+        if (activeBaseUrl.isBlank()) return null
+        val req = buildAuthorizedRequest("/api/tariffs/presets").get().build()
+        return apiHttp.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) return null
+            val body = resp.body?.string() ?: return null
+            JSONObject(body)
+        }
+    }
+
+    fun fetchTariffConfig(): JSONObject? {
+        if (activeBaseUrl.isBlank()) return null
+        val req = buildAuthorizedRequest("/api/tariffs/config").get().build()
+        return apiHttp.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) return null
+            val body = resp.body?.string() ?: return null
+            JSONObject(body)
+        }
+    }
+
+    fun fetchOctopusProducts(): JSONObject? {
+        if (activeBaseUrl.isBlank()) return null
+        val req = buildAuthorizedRequest("/api/tariffs/octopus/products").get().build()
+        return apiHttp.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) return null
+            val body = resp.body?.string() ?: return null
+            JSONObject(body)
+        }
+    }
+
+    fun lookupPostcode(postcode: String): JSONObject? {
+        if (activeBaseUrl.isBlank()) return null
+        val encoded = java.net.URLEncoder.encode(postcode.trim(), "UTF-8")
+        val req = buildAuthorizedRequest("/api/tariffs/octopus/lookup-postcode?postcode=$encoded").get().build()
+        return apiHttp.newCall(req).execute().use { resp ->
+            val body = resp.body?.string() ?: return null
+            JSONObject(body)
+        }
+    }
+
+    fun saveTariffConfig(payload: JSONObject): JSONObject? {
+        if (activeBaseUrl.isBlank()) return null
+        val body = payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+        val req = buildAuthorizedRequest("/api/tariffs/config").post(body).build()
+        return apiHttp.newCall(req).execute().use { resp ->
+            val respBody = resp.body?.string() ?: return null
+            JSONObject(respBody)
+        }
+    }
+
     fun sendControl(target: String, action: String, params: Map<String, Any>, description: String): Boolean {
         if (activeBaseUrl.isBlank()) return false
         val json = JSONObject()

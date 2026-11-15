@@ -82,6 +82,49 @@ data class PiSystemState(
     val uptimeStr: String = "",
 )
 
+data class DailyCostRecord(
+    val date: String,
+    val daysCount: Int = 1,
+    val importKwh: Double,
+    val exportKwh: Double,
+    val importCostGbp: Double,
+    val exportIncomeGbp: Double,
+    val standingChargeGbp: Double,
+    val netCostGbp: Double,
+    val avgDailyNetGbp: Double = 0.0,
+    val savingsGbp: Double,
+)
+
+data class CostSummaryState(
+    val loaded: Boolean = false,
+    val selectedPeriod: String = "days",
+    val periodDaysCount: Int = 0,
+    val periodAvgDailyNetGbp: Double = 0.0,
+    val periodImportKwh: Double = 0.0,
+    val periodExportKwh: Double = 0.0,
+    val periodImportCostGbp: Double = 0.0,
+    val periodStandingChargeGbp: Double = 0.0,
+    val periodPriceCapCostGbp: Double = 0.0,
+    val periodSavingsVsCapGbp: Double = 0.0,
+    val currencySymbol: String = "£",
+    val subUnitSymbol: String = "p",
+    val region: String = "H",
+    val importRateP: Double = 24.5,
+    val exportRateP: Double = 15.0,
+    val standingChargeP: Double = 60.0,
+    val importLabel: String = "Standard Variable Tariff",
+    val exportLabel: String = "Outgoing Octopus Fixed",
+    val todayNetCostGbp: Double = 0.0,
+    val todayImportCostGbp: Double = 0.0,
+    val todayExportIncomeGbp: Double = 0.0,
+    val todayStandingChargeGbp: Double = 0.0,
+    val todaySavingsGbp: Double = 0.0,
+    val thirtyDayNetCostGbp: Double = 0.0,
+    val thirtyDayExportIncomeGbp: Double = 0.0,
+    val thirtyDaySavingsGbp: Double = 0.0,
+    val dailyCosts: List<DailyCostRecord> = emptyList(),
+)
+
 data class PlantUiState(
     val propertyName: String = "Home",
     val connectionMode: String = "Connecting…",
@@ -96,6 +139,7 @@ data class PlantUiState(
     val historySeries: List<LivePoint> = emptyList(),
     val historyRangeDays: Int = 1,
     val dailyHistory: List<DailyRecord> = emptyList(),
+    val costSummary: CostSummaryState = CostSummaryState(),
     val errorBanner: String? = null,
 )
 
@@ -257,5 +301,67 @@ object PlantJsonParser {
             )
         }
         return out
+    }
+
+    fun parseCostSummary(json: JSONObject): CostSummaryState {
+        val rates = json.optJSONObject("current_rates") ?: JSONObject()
+        val today = json.optJSONObject("today") ?: JSONObject()
+        val daily = json.optJSONObject("daily") ?: JSONObject()
+        val tot30 = daily.optJSONObject("totals") ?: JSONObject()
+        val period = daily.optString("period", "days")
+        val daysArr = daily.optJSONArray("rows") ?: daily.optJSONArray("days") ?: JSONArray()
+        val rows = mutableListOf<DailyCostRecord>()
+        for (i in 0 until daysArr.length()) {
+            val d = daysArr.optJSONObject(i) ?: continue
+            val net = d.safeDouble("net_cost_gbp")
+            val dc = d.optInt("days_count", 1).coerceAtLeast(1)
+            rows.add(
+                DailyCostRecord(
+                    date = d.optString("label", "").ifBlank { d.optString("date_str", "") },
+                    daysCount = dc,
+                    importKwh = d.safeDouble("import_kwh"),
+                    exportKwh = d.safeDouble("export_kwh"),
+                    importCostGbp = d.safeDouble("import_cost_gbp"),
+                    exportIncomeGbp = d.safeDouble("export_income_gbp"),
+                    standingChargeGbp = d.safeDouble("standing_charge_gbp"),
+                    netCostGbp = net,
+                    avgDailyNetGbp = if (d.has("avg_daily_net_gbp")) d.safeDouble("avg_daily_net_gbp") else net / dc,
+                    savingsGbp = d.safeDouble("savings_gbp"),
+                )
+            )
+        }
+        val impDesc = rates.optString("import_description", "").trim()
+        val expDesc = rates.optString("export_description", "").trim()
+        val impLbl = rates.optString("import_label", "Import Tariff")
+        val expLbl = rates.optString("export_label", "Export Tariff")
+        return CostSummaryState(
+            loaded = true,
+            selectedPeriod = period,
+            periodDaysCount = tot30.optInt("days_count", rows.sumOf { it.daysCount }),
+            periodAvgDailyNetGbp = tot30.safeDouble("avg_daily_net_gbp"),
+            periodImportKwh = tot30.safeDouble("import_kwh"),
+            periodExportKwh = tot30.safeDouble("export_kwh"),
+            periodImportCostGbp = tot30.safeDouble("import_cost_gbp"),
+            periodStandingChargeGbp = tot30.safeDouble("standing_charge_gbp"),
+            periodPriceCapCostGbp = tot30.safeDouble("price_cap_cost_gbp"),
+            periodSavingsVsCapGbp = tot30.safeDouble("savings_vs_price_cap_gbp"),
+            currencySymbol = json.optString("currency_symbol", "£"),
+            subUnitSymbol = json.optString("sub_unit_symbol", "p"),
+            region = json.optString("region", "H"),
+            importRateP = rates.safeDouble("import_rate_p", 24.5),
+            exportRateP = rates.safeDouble("export_rate_p", 15.0),
+            standingChargeP = rates.safeDouble("standing_charge_p", 60.0),
+            importLabel = if (impDesc.isNotEmpty()) "$impDesc ($impLbl)" else impLbl,
+            exportLabel = if (expDesc.isNotEmpty()) "$expDesc ($expLbl)" else expLbl,
+            todayNetCostGbp = today.safeDouble("net_cost_gbp"),
+            todayImportCostGbp = today.safeDouble("import_cost_gbp"),
+            todayExportIncomeGbp = today.safeDouble("export_income_gbp"),
+            todayStandingChargeGbp = today.safeDouble("standing_charge_gbp"),
+            todaySavingsGbp = today.safeDouble("savings_gbp"),
+            thirtyDayNetCostGbp = tot30.safeDouble("net_cost_gbp"),
+            thirtyDayExportIncomeGbp = tot30.safeDouble("export_income_gbp"),
+            thirtyDaySavingsGbp = tot30.safeDouble("savings_gbp"),
+            dailyCosts = rows,
+        )
     }
 }

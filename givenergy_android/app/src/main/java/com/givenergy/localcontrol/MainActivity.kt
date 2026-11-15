@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.CurrencyPound
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Refresh
@@ -157,6 +158,15 @@ class MainActivity : ComponentActivity() {
                             label = { Text("History") },
                         )
                         NavigationBarItem(
+                            selected = selectedTab == 4,
+                            onClick = {
+                                selectedTab = 4
+                                loadCostsAsync()
+                            },
+                            icon = { Icon(Icons.Default.CurrencyPound, contentDescription = "Costs") },
+                            label = { Text("Costs") },
+                        )
+                        NavigationBarItem(
                             selected = selectedTab == 3,
                             onClick = { selectedTab = 3 },
                             icon = { Icon(Icons.Default.Memory, contentDescription = "System") },
@@ -192,6 +202,22 @@ class MainActivity : ComponentActivity() {
                             state = uiState,
                             onSelectRange = { days -> loadHistoryAsync(days) },
                             onReloadHistory = { loadHistoryAsync(uiState.historyRangeDays) },
+                        )
+                        4 -> CostsScreen(
+                            state = uiState,
+                            onRefreshCosts = { loadCostsAsync(uiState.costSummary.selectedPeriod) },
+                            onSelectCostPeriod = { period -> loadCostsAsync(period) },
+                            onOpenTariffWebSetup = {
+                                val cfg = PairingStore.load(this@MainActivity)
+                                val base = if (uiState.connectionMode == "Funnel HTTPS" && cfg.funnelUrl.isNotBlank()) {
+                                    cfg.funnelUrl
+                                } else {
+                                    cfg.lanUrl.ifBlank { cfg.funnelUrl }
+                                }
+                                if (base.isNotBlank()) {
+                                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("$base/?tab=costs")))
+                                }
+                            },
                         )
                         3 -> SystemScreen(
                             state = uiState,
@@ -341,6 +367,26 @@ class MainActivity : ComponentActivity() {
             }
         }
         loadHistoryAsync()
+        loadCostsAsync()
+    }
+
+    private fun loadCostsAsync(period: String = uiState.costSummary.selectedPeriod) {
+        runOnUiThread {
+            uiState = uiState.copy(costSummary = uiState.costSummary.copy(selectedPeriod = period))
+        }
+        thread {
+            try {
+                val daysParam = if (period == "days") 30 else 0
+                val costJson = apiClient.fetchCostSummary(daysParam, period)
+                if (costJson != null) {
+                    val parsed = PlantJsonParser.parseCostSummary(costJson)
+                    runOnUiThread {
+                        uiState = uiState.copy(costSummary = parsed)
+                    }
+                }
+            } catch (_: Exception) {
+            }
+        }
     }
 
     private fun loadHistoryAsync(days: Int = uiState.historyRangeDays) {

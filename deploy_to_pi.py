@@ -26,6 +26,7 @@ FILES_TO_DEPLOY = [
     ("givenergy_web/database.py", "givenergy_web/database.py"),
     ("givenergy_web/poller.py", "givenergy_web/poller.py"),
     ("givenergy_web/server.py", "givenergy_web/server.py"),
+    ("givenergy_web/tariffs.py", "givenergy_web/tariffs.py"),
     ("givenergy_web/static/index.html", "givenergy_web/static/index.html"),
     ("givenergy_web/static/manifest.json", "givenergy_web/static/manifest.json"),
     ("givenergy_web/static/icon-192.png", "givenergy_web/static/icon-192.png"),

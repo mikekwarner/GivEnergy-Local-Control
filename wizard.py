@@ -24,6 +24,8 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFormLayout,
+    QFrame,
+    QGraphicsOpacityEffect,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -33,10 +35,12 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
     QVBoxLayout,
+    QWidget,
     QWizard,
     QWizardPage,
 )
@@ -44,6 +48,13 @@ from PySide6.QtWidgets import (
 import deploy_to_pi
 import setup_pi
 from givenergy_web import __version__ as APP_VERSION
+from givenergy_web.tariffs import (
+    UK_GSP_REGIONS,
+    UK_TARIFF_PRESETS,
+    fetch_octopus_product_summary,
+    fetch_octopus_products,
+    lookup_gsp_by_postcode,
+)
 
 # Official Raspberry Pi Foundation MAC OUI prefixes
 RPI_MAC_PREFIXES = (
@@ -77,6 +88,14 @@ QGroupBox::title {
     left: 10px;
     padding: 0 6px;
 }
+QGroupBox:disabled {
+    background-color: #0D1320;
+    border-color: #162033;
+    color: #475569;
+}
+QLabel:disabled {
+    color: #475569;
+}
 QLineEdit, QComboBox {
     background-color: #090D16;
     color: #F8FAFC;
@@ -85,6 +104,11 @@ QLineEdit, QComboBox {
     padding: 5px 10px;
     min-height: 22px;
     font-size: 13px;
+}
+QLineEdit:disabled, QComboBox:disabled {
+    background-color: #0D1320;
+    color: #475569;
+    border-color: #1E293B;
 }
 QLineEdit:focus, QComboBox:focus {
     border-color: #3B82F6;
@@ -96,6 +120,11 @@ QPushButton {
     border-radius: 6px;
     padding: 7px 14px;
     font-weight: 600;
+}
+QPushButton:disabled {
+    background-color: #0D1320;
+    color: #475569;
+    border-color: #1E293B;
 }
 QPushButton:hover {
     background-color: #24314A;
@@ -310,6 +339,7 @@ class DeployWorker(QThread):
         tailscale_authkey: str,
         storage_mode: str = "sd",
         wipe_existing_data: bool = False,
+        tariff_config_dict: dict | None = None,
     ) -> None:
         super().__init__()
         self.host = host
@@ -319,6 +349,7 @@ class DeployWorker(QThread):
         self.tailscale_authkey = tailscale_authkey
         self.storage_mode = storage_mode
         self.wipe_existing_data = wipe_existing_data
+        self.tariff_config_dict = tariff_config_dict
 
     def _run_remote(self, ssh: paramiko.SSHClient, cmd: str, sudo: bool = False) -> tuple[int, str, str]:
         return deploy_to_pi.run_remote(ssh, cmd, sudo=sudo, password=self.password)
@@ -501,6 +532,22 @@ class DeployWorker(QThread):
             )
             if rc != 0:
                 raise RuntimeError("Application deployment returned non-zero exit code.")
+
+            if self.tariff_config_dict:
+                self.log_line.emit("  Uploading pre-configured UK energy tariff settings...")
+                ssh_t = paramiko.SSHClient()
+                ssh_t.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                try:
+                    ssh_t.connect(self.host, username=self.user, password=self.password, timeout=8.0)
+                    sftp = ssh_t.open_sftp()
+                    remote_tariff_path = f"{deploy_to_pi.REMOTE_ROOT}/data/tariff_config.json"
+                    with sftp.open(remote_tariff_path, "w") as f:
+                        f.write(json.dumps(self.tariff_config_dict, indent=2))
+                    sftp.close()
+                    self._run_remote(ssh_t, "systemctl restart givenergy-web", sudo=True)
+                    self.log_line.emit("  [OK] Tariff configuration saved and service restarted.")
+                finally:
+                    ssh_t.close()
 
             # Re-check Tailscale IP in case user clicked the login link during step 4
             if self.install_tailscale and not ts_ip:
@@ -776,11 +823,113 @@ class DiscoverPiPage(QWizardPage):
                 self.selected_ip_edit.setText(ip)
 
 
+def _wizard_config_path() -> Path:
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        return Path(appdata) / "GivEnergyLocalControl" / "wizard.config"
+    return Path.home() / ".config" / "givenergy-local-control" / "wizard.config"
+
+
+def _dpapi_protect(plaintext: str) -> str:
+    if not plaintext or sys.platform != "win32":
+        return ""
+    import base64
+    import ctypes
+    from ctypes import wintypes
+
+    class DATA_BLOB(ctypes.Structure):
+        _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_byte))]
+
+    raw = plaintext.encode("utf-8")
+    buf = ctypes.create_string_buffer(raw, len(raw))
+    blob_in = DATA_BLOB(len(raw), ctypes.cast(buf, ctypes.POINTER(ctypes.c_byte)))
+    blob_out = DATA_BLOB()
+    if not ctypes.windll.crypt32.CryptProtectData(
+        ctypes.byref(blob_in), "GivEnergyWizard", None, None, None, 0, ctypes.byref(blob_out)
+    ):
+        return ""
+    try:
+        out_bytes = ctypes.string_at(blob_out.pbData, blob_out.cbData)
+        return "dpapi:" + base64.b64encode(out_bytes).decode("ascii")
+    finally:
+        ctypes.windll.kernel32.LocalFree(blob_out.pbData)
+
+
+def _dpapi_unprotect(token: str) -> str:
+    if not token or not token.startswith("dpapi:") or sys.platform != "win32":
+        return ""
+    import base64
+    import ctypes
+    from ctypes import wintypes
+
+    class DATA_BLOB(ctypes.Structure):
+        _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_byte))]
+
+    try:
+        raw = base64.b64decode(token[6:].encode("ascii"))
+    except Exception:
+        return ""
+    buf = ctypes.create_string_buffer(raw, len(raw))
+    blob_in = DATA_BLOB(len(raw), ctypes.cast(buf, ctypes.POINTER(ctypes.c_byte)))
+    blob_out = DATA_BLOB()
+    if not ctypes.windll.crypt32.CryptUnprotectData(
+        ctypes.byref(blob_in), None, None, None, None, 0, ctypes.byref(blob_out)
+    ):
+        return ""
+    try:
+        return ctypes.string_at(blob_out.pbData, blob_out.cbData).decode("utf-8", errors="replace")
+    finally:
+        ctypes.windll.kernel32.LocalFree(blob_out.pbData)
+
+
+def _load_wizard_config() -> dict:
+    p = _wizard_config_path()
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {}
+        if data.get("pi_pass_dpapi"):
+            data["pi_pass"] = _dpapi_unprotect(str(data["pi_pass_dpapi"]))
+        return data
+    except Exception:
+        return {}
+
+
+def _save_wizard_config(
+    host: str,
+    user: str,
+    password: str,
+    install_tailscale: bool,
+    storage_mode: str,
+    remember: bool,
+) -> None:
+    p = _wizard_config_path()
+    if not remember:
+        if p.exists():
+            try:
+                p.unlink()
+            except Exception:
+                pass
+        return
+    p.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "pi_host": host.strip(),
+        "pi_user": user.strip(),
+        "pi_pass_dpapi": _dpapi_protect(password),
+        "install_tailscale": bool(install_tailscale),
+        "storage_mode": storage_mode,
+    }
+    p.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
 class CredentialsPage(QWizardPage):
     def __init__(self) -> None:
         super().__init__()
-        self.setTitle("Step 3: Pi Credentials & Remote Access")
+        self.setTitle("Step 4: Pi Credentials & Remote Access")
         self.setSubTitle("Confirm the target Raspberry Pi SSH login and optional Tailscale settings.")
+        saved = _load_wizard_config()
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
@@ -794,13 +943,13 @@ class CredentialsPage(QWizardPage):
         form.setContentsMargins(14, 18, 14, 12)
         form.setColumnStretch(1, 1)
 
-        self.inp_host = QLineEdit(os.environ.get("GIVENERGY_PI_HOST", ""))
+        self.inp_host = QLineEdit(os.environ.get("GIVENERGY_PI_HOST", "") or str(saved.get("pi_host", "")))
         self.inp_host.setPlaceholderText("e.g. 192.168.0.243 or givenergy-pi.local")
         self.inp_host.setFixedHeight(row_h)
-        self.inp_user = QLineEdit(os.environ.get("GIVENERGY_PI_USER", ""))
+        self.inp_user = QLineEdit(os.environ.get("GIVENERGY_PI_USER", "") or str(saved.get("pi_user", "")))
         self.inp_user.setPlaceholderText("Enter Raspberry Pi SSH username")
         self.inp_user.setFixedHeight(row_h)
-        self.inp_pass = QLineEdit(os.environ.get("GIVENERGY_PI_PASS", ""))
+        self.inp_pass = QLineEdit(os.environ.get("GIVENERGY_PI_PASS", "") or str(saved.get("pi_pass", "")))
         self.inp_pass.setPlaceholderText("Enter Raspberry Pi SSH password")
         self.inp_pass.setEchoMode(QLineEdit.Password)
         self.inp_pass.setFixedHeight(row_h)
@@ -830,13 +979,17 @@ class CredentialsPage(QWizardPage):
         test_row.addWidget(self.btn_test)
         test_row.addWidget(self.lbl_test, 1)
 
+        self.chk_remember = QCheckBox("Remember SSH credentials securely on this PC (Windows DPAPI encrypted)")
+        self.chk_remember.setChecked(True)
+
         form.addWidget(QLabel("Pi IP / Hostname:"), 0, 0)
         form.addWidget(self.inp_host, 0, 1)
         form.addWidget(QLabel("SSH Username:"), 1, 0)
         form.addWidget(self.inp_user, 1, 1)
         form.addWidget(QLabel("SSH Password:"), 2, 0)
         form.addLayout(pw_row, 2, 1)
-        form.addLayout(test_row, 3, 0, 1, 2)
+        form.addWidget(self.chk_remember, 3, 0, 1, 2)
+        form.addLayout(test_row, 4, 0, 1, 2)
         layout.addWidget(grp_ssh)
 
         grp_ts = QGroupBox("Tailscale Remote Access (Recommended for Phone && Off-Site Access)")
@@ -847,13 +1000,13 @@ class CredentialsPage(QWizardPage):
         ts_layout.setColumnStretch(1, 1)
 
         self.chk_tailscale = QCheckBox("Install && configure Tailscale on this Pi")
-        self.chk_tailscale.setChecked(True)
+        self.chk_tailscale.setChecked(bool(saved.get("install_tailscale", True)))
 
         lbl_ts_info = QLabel(
             "<b>What Tailscale is used for:</b> Enables <b>Tailscale Funnel</b> (HTTPS + Bearer Token) for remote access "
             "via browser or the <b>GivEnergy Control Android app</b> (<code>givenergy-local-control.apk</code>) without "
             "router port-forwarding or Tailscale on your phone.<br>"
-            "Step 4 provides a <b>login.tailscale.com</b> link; pair the Android app via the QR code in <b>⚙ Property Setup</b>."
+            "Step 5 provides a <b>login.tailscale.com</b> link; pair the Android app via the QR code in <b>⚙ Property Setup</b>."
         )
         lbl_ts_info.setWordWrap(True)
         lbl_ts_info.setStyleSheet("color: #94A3B8; font-size: 11.5px;")
@@ -875,6 +1028,8 @@ class CredentialsPage(QWizardPage):
         self.cmb_storage.setMinimumContentsLength(28)
         self.cmb_storage.addItem("MicroSD Card (Wear-Protection: RAM logs, 60s DB batch, noatime)", "sd")
         self.cmb_storage.addItem("NVMe / USB SSD (High-Durability: Disk logs, 15s DB flush, fstrim, noatime)", "ssd")
+        if saved.get("storage_mode") == "ssd":
+            self.cmb_storage.setCurrentIndex(1)
         self.lbl_storage_hint = QLabel(
             "<b>Why this matters:</b> <b>MicroSD Card</b> keeps logs in RAM (60s DB batch) to reduce card wear; "
             "<b>NVMe / USB SSD</b> enables disk logs, 15s flush, and <code>fstrim</code>. "
@@ -890,17 +1045,35 @@ class CredentialsPage(QWizardPage):
         store_layout.addWidget(self.chk_wipe_data, 2, 0, 1, 2)
         layout.addWidget(grp_store)
 
-        self.registerField("pi_host*", self.inp_host)
-        self.registerField("pi_user*", self.inp_user)
-        self.registerField("pi_pass*", self.inp_pass)
+        self.registerField("pi_host", self.inp_host)
+        self.registerField("pi_user", self.inp_user)
+        self.registerField("pi_pass", self.inp_pass)
         self.registerField("install_ts", self.chk_tailscale)
         self.registerField("wipe_data", self.chk_wipe_data)
+        self.inp_host.textChanged.connect(lambda: self.completeChanged.emit())
+        self.inp_user.textChanged.connect(lambda: self.completeChanged.emit())
+        self.inp_pass.textChanged.connect(lambda: self.completeChanged.emit())
         layout.addStretch()
+
+    def isComplete(self) -> bool:
+        return bool(self.inp_host.text().strip() and self.inp_user.text().strip() and self.inp_pass.text())
+
+    def validatePage(self) -> bool:
+        _save_wizard_config(
+            host=self.inp_host.text(),
+            user=self.inp_user.text(),
+            password=self.inp_pass.text(),
+            install_tailscale=self.chk_tailscale.isChecked(),
+            storage_mode=self.cmb_storage.currentData() or "sd",
+            remember=self.chk_remember.isChecked(),
+        )
+        return super().validatePage()
 
     def initializePage(self) -> None:
         detected = self.field("detected_ip")
         if detected and str(detected).strip():
             self.inp_host.setText(str(detected).strip())
+        self.completeChanged.emit()
         self.updateGeometry()
         if self.layout() is not None:
             self.layout().activate()
@@ -938,10 +1111,515 @@ class CredentialsPage(QWizardPage):
             ssh.close()
 
 
+class _OctopusFetchWorker(QThread):
+    loaded = Signal(dict)
+    failed = Signal(str)
+
+    def run(self) -> None:
+        try:
+            self.loaded.emit(fetch_octopus_products())
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class _PostcodeWorker(QThread):
+    resolved = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, postcode: str) -> None:
+        super().__init__()
+        self.postcode = postcode
+
+    def run(self) -> None:
+        try:
+            self.resolved.emit(lookup_gsp_by_postcode(self.postcode))
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class _OctopusRateWorker(QThread):
+    loaded = Signal(str, dict)
+    failed = Signal(str, str)
+
+    def __init__(self, side: str, product_code: str, region: str) -> None:
+        super().__init__()
+        self.side = side
+        self.product_code = product_code
+        self.region = region
+
+    def run(self) -> None:
+        try:
+            res = fetch_octopus_product_summary(self.product_code, self.region)
+            self.loaded.emit(self.side, res)
+        except Exception as exc:
+            self.failed.emit(self.side, str(exc))
+
+
+class TariffSetupPage(QWizardPage):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setTitle("Step 3: Energy Tariff & Cost Monitoring (Optional)")
+        self.setSubTitle("Pre-configure your UK import & export tariff, or leave unchecked to keep existing Pi settings / configure later.")
+        self._octopus_data: dict | None = None
+        self._oct_worker: _OctopusFetchWorker | None = None
+        self._pc_worker: _PostcodeWorker | None = None
+        self._rate_workers: dict[str, _OctopusRateWorker] = {}
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+
+        self.chk_enable = QCheckBox("Configure / overwrite UK Energy Tariff settings on this Pi")
+        self.chk_enable.setChecked(False)
+        self.chk_enable.toggled.connect(self._on_toggle_enable)
+        layout.addWidget(self.chk_enable)
+
+        self.container = QWidget()
+        self.container.setEnabled(False)
+        self._opacity_fx = QGraphicsOpacityEffect(self.container)
+        self._opacity_fx.setOpacity(0.38)
+        self.container.setGraphicsEffect(self._opacity_fx)
+        cl = QVBoxLayout(self.container)
+        cl.setContentsMargins(0, 0, 4, 0)
+        cl.setSpacing(10)
+
+        row_h = 32
+
+        # Region & Currency (DNO/GSP applies to Octopus Live API regional pricing)
+        grp_reg = QGroupBox("Currency && UK Region (Octopus Live API)")
+        rl = QGridLayout(grp_reg)
+        rl.setVerticalSpacing(8)
+        rl.setHorizontalSpacing(10)
+        rl.setContentsMargins(14, 18, 14, 12)
+        rl.setColumnMinimumWidth(0, 180)
+        rl.setColumnStretch(1, 1)
+
+        self.lbl_region = QLabel("DNO / GSP Region:")
+        self.cmb_region = QComboBox()
+        self.cmb_region.setFixedHeight(row_h)
+        for code, name in UK_GSP_REGIONS.items():
+            self.cmb_region.addItem(f"{code} — {name}", code)
+        idx_h = self.cmb_region.findData("H")
+        if idx_h >= 0:
+            self.cmb_region.setCurrentIndex(idx_h)
+        self.cmb_region.currentIndexChanged.connect(self._on_region_changed)
+
+        self.lbl_postcode = QLabel("Postcode Lookup:")
+        self.inp_postcode = QLineEdit()
+        self.inp_postcode.setFixedHeight(row_h)
+        self.inp_postcode.setPlaceholderText("e.g. SW1A 1AA")
+        self.btn_lookup = QPushButton("Lookup Region")
+        self.btn_lookup.setFixedHeight(row_h)
+        self.btn_lookup.clicked.connect(self._lookup_postcode)
+        self.lbl_pc_status = QLabel("")
+        self.lbl_pc_status.setStyleSheet("color: #94A3B8; font-size: 11px;")
+
+        self.cmb_currency = QComboBox()
+        self.cmb_currency.setFixedHeight(row_h)
+        self.cmb_currency.addItem("£ (p)", ("£", "p"))
+        self.cmb_currency.addItem("€ (c)", ("€", "c"))
+        self.cmb_currency.addItem("$ (¢)", ("$", "¢"))
+
+        rl.addWidget(self.lbl_region, 0, 0)
+        rl.addWidget(self.cmb_region, 0, 1)
+        rl.addWidget(self.cmb_currency, 0, 2)
+        rl.addWidget(self.lbl_postcode, 1, 0)
+        rl.addWidget(self.inp_postcode, 1, 1)
+        rl.addWidget(self.btn_lookup, 1, 2)
+        rl.addWidget(self.lbl_pc_status, 2, 1, 1, 2)
+        cl.addWidget(grp_reg)
+
+        # Import Tariff (includes Standing Charge & Dual Rate)
+        grp_imp = QGroupBox("Import Tariff (Grid In)")
+        il = QGridLayout(grp_imp)
+        il.setVerticalSpacing(8)
+        il.setHorizontalSpacing(10)
+        il.setContentsMargins(14, 18, 14, 12)
+        il.setColumnMinimumWidth(0, 180)
+        il.setColumnStretch(1, 1)
+
+        self.cmb_imp_mode = QComboBox()
+        self.cmb_imp_mode.setFixedHeight(row_h)
+        self.cmb_imp_mode.addItem("Custom Flat Rate", "custom_flat")
+        self.cmb_imp_mode.addItem("Custom Dual Rate (Day / Off-Peak)", "custom_dual")
+        self.cmb_imp_mode.addItem("UK Supplier Preset (E.ON, EDF, BG, OVO, Octopus)", "preset")
+        self.cmb_imp_mode.addItem("Octopus Energy (Live Half-Hourly API)", "octopus_api")
+        self.cmb_imp_mode.currentIndexChanged.connect(lambda: self._on_mode_change("imp"))
+
+        self.lbl_imp_plan = QLabel("Plan / Product:")
+        self.cmb_imp_plan = QComboBox()
+        self.cmb_imp_plan.setFixedHeight(row_h)
+        self.cmb_imp_plan.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_imp_plan.setMinimumContentsLength(24)
+        self.cmb_imp_plan.currentIndexChanged.connect(lambda: self._on_plan_change("imp"))
+
+        self.lbl_imp_rate = QLabel("Day / Flat Rate (p/kWh):")
+        self.inp_imp_rate = QLineEdit("24.50")
+        self.inp_imp_rate.setFixedHeight(row_h)
+
+        self.lbl_imp_offpeak = QLabel("Off-Peak Rate & Window:")
+        self.wid_imp_offpeak = QWidget()
+        self.wid_imp_offpeak.setFixedHeight(row_h)
+        opl = QHBoxLayout(self.wid_imp_offpeak)
+        opl.setContentsMargins(0, 0, 0, 0)
+        opl.setSpacing(6)
+        self.inp_imp_offpeak_rate = QLineEdit("7.00")
+        self.inp_imp_offpeak_rate.setFixedSize(72, row_h)
+        self.inp_imp_start = QLineEdit("00:00")
+        self.inp_imp_start.setFixedSize(64, row_h)
+        self.inp_imp_end = QLineEdit("07:00")
+        self.inp_imp_end.setFixedSize(64, row_h)
+        opl.addWidget(self.inp_imp_offpeak_rate)
+        opl.addWidget(QLabel("p  from"))
+        opl.addWidget(self.inp_imp_start)
+        opl.addWidget(QLabel("to"))
+        opl.addWidget(self.inp_imp_end)
+        opl.addStretch()
+
+        self.inp_standing = QLineEdit("60.00")
+        self.inp_standing.setFixedHeight(row_h)
+        self.inp_imp_desc = QLineEdit()
+        self.inp_imp_desc.setFixedHeight(row_h)
+        self.inp_imp_desc.setPlaceholderText("Optional description (shown on dashboard)")
+
+        il.addWidget(QLabel("Source:"), 0, 0)
+        il.addWidget(self.cmb_imp_mode, 0, 1)
+        il.addWidget(self.lbl_imp_plan, 1, 0)
+        il.addWidget(self.cmb_imp_plan, 1, 1)
+        il.addWidget(self.lbl_imp_rate, 2, 0)
+        il.addWidget(self.inp_imp_rate, 2, 1)
+        il.addWidget(self.lbl_imp_offpeak, 3, 0)
+        il.addWidget(self.wid_imp_offpeak, 3, 1)
+        il.addWidget(QLabel("Standing Charge (p/day):"), 4, 0)
+        il.addWidget(self.inp_standing, 4, 1)
+        il.addWidget(QLabel("Description:"), 5, 0)
+        il.addWidget(self.inp_imp_desc, 5, 1)
+        cl.addWidget(grp_imp)
+
+        # Export Tariff
+        grp_exp = QGroupBox("Export Tariff (Solar / Grid Out)")
+        el = QGridLayout(grp_exp)
+        el.setVerticalSpacing(8)
+        el.setHorizontalSpacing(10)
+        el.setContentsMargins(14, 18, 14, 12)
+        el.setColumnMinimumWidth(0, 180)
+        el.setColumnStretch(1, 1)
+
+        self.cmb_exp_mode = QComboBox()
+        self.cmb_exp_mode.setFixedHeight(row_h)
+        self.cmb_exp_mode.addItem("Custom Flat Rate", "custom_flat")
+        self.cmb_exp_mode.addItem("UK Supplier Preset (Octopus, E.ON, BG, EDF, SEG)", "preset")
+        self.cmb_exp_mode.addItem("Octopus Energy (Live API)", "octopus_api")
+        self.cmb_exp_mode.setCurrentIndex(1)  # Default to UK Supplier Preset (Octopus Outgoing Fixed)
+        self.cmb_exp_mode.currentIndexChanged.connect(lambda: self._on_mode_change("exp"))
+
+        self.lbl_exp_plan = QLabel("Plan / Product:")
+        self.cmb_exp_plan = QComboBox()
+        self.cmb_exp_plan.setFixedHeight(row_h)
+        self.cmb_exp_plan.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_exp_plan.setMinimumContentsLength(24)
+        self.cmb_exp_plan.currentIndexChanged.connect(lambda: self._on_plan_change("exp"))
+        self.lbl_exp_rate = QLabel("Export Rate (p/kWh):")
+        self.inp_exp_rate = QLineEdit("15.00")
+        self.inp_exp_rate.setFixedHeight(row_h)
+        self.inp_exp_desc = QLineEdit()
+        self.inp_exp_desc.setFixedHeight(row_h)
+        self.inp_exp_desc.setPlaceholderText("Optional description (shown on dashboard)")
+
+        el.addWidget(QLabel("Source:"), 0, 0)
+        el.addWidget(self.cmb_exp_mode, 0, 1)
+        el.addWidget(self.lbl_exp_plan, 1, 0)
+        el.addWidget(self.cmb_exp_plan, 1, 1)
+        el.addWidget(self.lbl_exp_rate, 2, 0)
+        el.addWidget(self.inp_exp_rate, 2, 1)
+        el.addWidget(QLabel("Description:"), 3, 0)
+        el.addWidget(self.inp_exp_desc, 3, 1)
+        cl.addWidget(grp_exp)
+        cl.addStretch()
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(self.container)
+        layout.addWidget(scroll, 1)
+
+        self._on_mode_change("imp")
+        self._on_mode_change("exp")
+        self._on_toggle_enable(False)
+
+    def _on_toggle_enable(self, checked: bool) -> None:
+        self.container.setEnabled(checked)
+        self.cmb_currency.setEnabled(checked)
+        self._opacity_fx.setOpacity(1.0 if checked else 0.38)
+        self._update_region_enabled()
+
+    def _on_region_changed(self) -> None:
+        if self.cmb_imp_mode.currentData() == "octopus_api":
+            self._on_plan_change("imp")
+        if self.cmb_exp_mode.currentData() == "octopus_api":
+            self._on_plan_change("exp")
+
+    def _populate_presets(self, side: str) -> None:
+        key = "import" if side == "imp" else "export"
+        cmb = self.cmb_imp_plan if side == "imp" else self.cmb_exp_plan
+        cmb.blockSignals(True)
+        cmb.clear()
+        for p in UK_TARIFF_PRESETS[key]:
+            cmb.addItem(f"{p['supplier']} — {p['name']}", p)
+        cmb.blockSignals(False)
+        self._on_plan_change(side)
+
+    def _populate_octopus(self, side: str) -> None:
+        cmb = self.cmb_imp_plan if side == "imp" else self.cmb_exp_plan
+        cmb.blockSignals(True)
+        cmb.clear()
+        if not self._octopus_data:
+            cmb.addItem("Fetching live Octopus products…", None)
+            cmb.blockSignals(False)
+            self._ensure_octopus_products()
+            return
+        key = "import_products" if side == "imp" else "export_products"
+        for p in self._octopus_data.get(key, []):
+            cmb.addItem(f"{p['display_name']} ({p['code']})", p)
+        cmb.blockSignals(False)
+        self._on_plan_change(side)
+
+    def _ensure_octopus_products(self) -> None:
+        if self._oct_worker and self._oct_worker.isRunning():
+            return
+        self._oct_worker = _OctopusFetchWorker()
+        self._oct_worker.loaded.connect(self._on_octopus_loaded)
+        self._oct_worker.failed.connect(lambda err: self.lbl_pc_status.setText(f"Octopus fetch failed: {err}"))
+        self._oct_worker.start()
+
+    def _on_octopus_loaded(self, data: dict) -> None:
+        self._octopus_data = data
+        if self.cmb_imp_mode.currentData() == "octopus_api":
+            self._populate_octopus("imp")
+        if self.cmb_exp_mode.currentData() == "octopus_api":
+            self._populate_octopus("exp")
+
+    def _on_mode_change(self, side: str) -> None:
+        mode = (self.cmb_imp_mode if side == "imp" else self.cmb_exp_mode).currentData()
+        cmb = self.cmb_imp_plan if side == "imp" else self.cmb_exp_plan
+        lbl_plan = self.lbl_imp_plan if side == "imp" else self.lbl_exp_plan
+        rate_inp = self.inp_imp_rate if side == "imp" else self.inp_exp_rate
+        lbl_rate = self.lbl_imp_rate if side == "imp" else self.lbl_exp_rate
+
+        show_plan = mode in ("preset", "octopus_api")
+        lbl_plan.setVisible(show_plan)
+        cmb.setVisible(show_plan)
+
+        if side == "imp":
+            self.lbl_imp_offpeak.setVisible(mode == "custom_dual")
+            self.wid_imp_offpeak.setVisible(mode == "custom_dual")
+            self.inp_standing.setReadOnly(mode == "octopus_api")
+
+        rate_inp.setReadOnly(mode == "octopus_api")
+        if mode == "octopus_api":
+            lbl_rate.setText("Current Live Rate (p/kWh):" if side == "imp" else "Current Live Export (p/kWh):")
+            self._populate_octopus(side)
+        elif mode == "preset":
+            lbl_rate.setText("Day / Default Rate (p/kWh):" if side == "imp" else "Export Rate (p/kWh):")
+            self._populate_presets(side)
+        elif mode == "custom_dual":
+            lbl_rate.setText("Day Rate (p/kWh):")
+        else:
+            lbl_rate.setText("Flat Rate (p/kWh):" if side == "imp" else "Export Rate (p/kWh):")
+        self._update_region_enabled()
+        self.container.updateGeometry()
+        if self.layout() is not None:
+            self.layout().activate()
+
+    def _update_region_enabled(self) -> None:
+        uses_octopus = self.chk_enable.isChecked() and (
+            self.cmb_imp_mode.currentData() == "octopus_api"
+            or self.cmb_exp_mode.currentData() == "octopus_api"
+        )
+        for w in (self.lbl_region, self.cmb_region, self.lbl_postcode, self.inp_postcode, self.btn_lookup, self.lbl_pc_status):
+            w.setEnabled(uses_octopus)
+
+    def _on_plan_change(self, side: str) -> None:
+        mode = (self.cmb_imp_mode if side == "imp" else self.cmb_exp_mode).currentData()
+        cmb = self.cmb_imp_plan if side == "imp" else self.cmb_exp_plan
+        p = cmb.currentData()
+        if not isinstance(p, dict):
+            return
+
+        rate_inp = self.inp_imp_rate if side == "imp" else self.inp_exp_rate
+        if mode == "preset":
+            rate_inp.setText(f"{float(p.get('default_rate_p', 0.0)):.2f}")
+            if side == "imp":
+                if "standing_charge_p" in p:
+                    self.inp_standing.setText(f"{float(p['standing_charge_p']):.2f}")
+                wins = p.get("windows") or []
+                has_win = len(wins) > 0
+                self.lbl_imp_offpeak.setVisible(has_win)
+                self.wid_imp_offpeak.setVisible(has_win)
+                if has_win:
+                    w = wins[0]
+                    self.inp_imp_offpeak_rate.setText(f"{float(w.get('rate_p', 7.0)):.2f}")
+                    self.inp_imp_start.setText(str(w.get("start", "00:00")))
+                    self.inp_imp_end.setText(str(w.get("end", "07:00")))
+                self.container.updateGeometry()
+                if self.layout() is not None:
+                    self.layout().activate()
+        elif mode == "octopus_api":
+            prod_code = str(p.get("code", ""))
+            region = str(self.cmb_region.currentData() or "H")
+            if not prod_code:
+                return
+            rate_inp.setText("Fetching…")
+            if side == "imp":
+                self.inp_standing.setText("Fetching…")
+            worker = _OctopusRateWorker(side, prod_code, region)
+            self._rate_workers[side] = worker
+            worker.loaded.connect(self._on_octopus_rate_loaded)
+            worker.failed.connect(self._on_octopus_rate_failed)
+            worker.start()
+
+    def _on_octopus_rate_loaded(self, side: str, info: dict) -> None:
+        mode = (self.cmb_imp_mode if side == "imp" else self.cmb_exp_mode).currentData()
+        if mode != "octopus_api":
+            return
+        rate_inp = self.inp_imp_rate if side == "imp" else self.inp_exp_rate
+        cr = info.get("current_rate_p")
+        rate_inp.setText(f"{float(cr):.2f}" if cr is not None else "Live API")
+        if side == "imp":
+            sc = info.get("standing_charge_p")
+            if sc is not None:
+                self.inp_standing.setText(f"{float(sc):.2f}")
+
+    def _on_octopus_rate_failed(self, side: str, err: str) -> None:
+        rate_inp = self.inp_imp_rate if side == "imp" else self.inp_exp_rate
+        rate_inp.setText("Sync on Pi")
+        if side == "imp" and self.inp_standing.text() == "Fetching…":
+            self.inp_standing.setText("60.00")
+
+    def _lookup_postcode(self) -> None:
+        pc = self.inp_postcode.text().strip()
+        if not pc:
+            self.lbl_pc_status.setText("Enter a UK postcode first.")
+            return
+        self.btn_lookup.setEnabled(False)
+        self.lbl_pc_status.setText("Looking up DNO region…")
+        self._pc_worker = _PostcodeWorker(pc)
+        self._pc_worker.resolved.connect(self._on_postcode_resolved)
+        self._pc_worker.failed.connect(self._on_postcode_failed)
+        self._pc_worker.start()
+
+    def _on_postcode_resolved(self, region: str) -> None:
+        self.btn_lookup.setEnabled(True)
+        idx = self.cmb_region.findData(region)
+        if idx >= 0:
+            self.cmb_region.setCurrentIndex(idx)
+        self.lbl_pc_status.setText(f"✓ Detected Region {region} — {UK_GSP_REGIONS.get(region, region)}")
+
+    def _on_postcode_failed(self, err: str) -> None:
+        self.btn_lookup.setEnabled(True)
+        self.lbl_pc_status.setText(f"Lookup failed: {err}")
+
+    def build_tariff_config(self) -> dict | None:
+        if not self.chk_enable.isChecked():
+            return None
+        cur, sub = self.cmb_currency.currentData() or ("£", "p")
+        try:
+            standing = float(self.inp_standing.text().strip() or "60.00")
+        except ValueError:
+            standing = 60.0
+
+        def _side(side: str) -> dict:
+            mode = (self.cmb_imp_mode if side == "imp" else self.cmb_exp_mode).currentData()
+            cmb = self.cmb_imp_plan if side == "imp" else self.cmb_exp_plan
+            rate_inp = self.inp_imp_rate if side == "imp" else self.inp_exp_rate
+            try:
+                default_rate = float(rate_inp.text().strip() or "0")
+            except ValueError:
+                default_rate = 24.5 if side == "imp" else 15.0
+            data = cmb.currentData()
+            desc = (self.inp_imp_desc if side == "imp" else self.inp_exp_desc).text().strip()
+            if mode == "octopus_api" and isinstance(data, dict):
+                return {
+                    "mode": "octopus_api",
+                    "preset_id": "",
+                    "label": f"{data.get('display_name', data.get('code', ''))}",
+                    "description": desc,
+                    "octopus_product_code": data.get("code", ""),
+                    "octopus_tariff_code": "",
+                    "default_rate_p": default_rate,
+                    "windows": [],
+                }
+            if mode == "preset" and isinstance(data, dict):
+                wins = list(data.get("windows", []))
+                if side == "imp" and wins:
+                    try:
+                        op_rate = float(self.inp_imp_offpeak_rate.text().strip() or wins[0].get("rate_p", 7.0))
+                    except ValueError:
+                        op_rate = float(wins[0].get("rate_p", 7.0))
+                    wins[0] = {
+                        "start": self.inp_imp_start.text().strip() or wins[0].get("start", "00:00"),
+                        "end": self.inp_imp_end.text().strip() or wins[0].get("end", "07:00"),
+                        "rate_p": op_rate,
+                        "label": wins[0].get("label", "Off-Peak"),
+                    }
+                return {
+                    "mode": "preset",
+                    "preset_id": data.get("id", ""),
+                    "label": f"{data.get('supplier', '')} — {data.get('name', '')}",
+                    "description": desc,
+                    "octopus_product_code": "",
+                    "octopus_tariff_code": "",
+                    "default_rate_p": default_rate,
+                    "windows": wins,
+                }
+            if mode == "custom_dual" and side == "imp":
+                try:
+                    op_rate = float(self.inp_imp_offpeak_rate.text().strip() or "7.0")
+                except ValueError:
+                    op_rate = 7.0
+                return {
+                    "mode": "custom",
+                    "preset_id": "",
+                    "label": "Custom Dual Rate",
+                    "description": desc,
+                    "octopus_product_code": "",
+                    "octopus_tariff_code": "",
+                    "default_rate_p": default_rate,
+                    "windows": [
+                        {
+                            "start": self.inp_imp_start.text().strip() or "00:00",
+                            "end": self.inp_imp_end.text().strip() or "07:00",
+                            "rate_p": op_rate,
+                            "label": "Off-Peak",
+                        }
+                    ],
+                }
+            return {
+                "mode": "custom",
+                "preset_id": "",
+                "label": "Custom Flat Rate",
+                "description": desc,
+                "octopus_product_code": "",
+                "octopus_tariff_code": "",
+                "default_rate_p": default_rate,
+                "windows": [],
+            }
+
+        return {
+            "currency_symbol": cur,
+            "sub_unit_symbol": sub,
+            "region": self.cmb_region.currentData() or "H",
+            "postcode": self.inp_postcode.text().strip().upper(),
+            "standing_charge_p": standing,
+            "import_tariff": _side("imp"),
+            "export_tariff": _side("exp"),
+            "last_octopus_sync": "",
+        }
+
+
 class DeployProgressPage(QWizardPage):
     def __init__(self) -> None:
         super().__init__()
-        self.setTitle("Step 4: Provisioning & Installing GivEnergy Web Service")
+        self.setTitle("Step 5: Provisioning & Installing GivEnergy Web Service")
         self.setSubTitle("Configuring SD-safe RAM logging, Python environment, Tailscale, and systemd service.")
         self._worker: DeployWorker | None = None
         self._done_ok = False
@@ -983,8 +1661,10 @@ class DeployProgressPage(QWizardPage):
         if self._worker and self._worker.isRunning():
             return
         self.btn_retry.setVisible(False)
-        cred_page = self.wizard().page(2)
+        cred_page = self.wizard().page(3)
         storage_mode = cred_page.cmb_storage.currentData() if hasattr(cred_page, "cmb_storage") else "sd"
+        tariff_page = self.wizard().page(2)
+        tariff_cfg = tariff_page.build_tariff_config() if hasattr(tariff_page, "build_tariff_config") else None
         self._worker = DeployWorker(
             host=str(self.field("pi_host")).strip(),
             user=str(self.field("pi_user")).strip(),
@@ -993,6 +1673,7 @@ class DeployProgressPage(QWizardPage):
             tailscale_authkey="",
             storage_mode=storage_mode,
             wipe_existing_data=bool(self.field("wipe_data")),
+            tariff_config_dict=tariff_cfg,
         )
         self._worker.log_line.connect(self.log_box.append)
         self._worker.progress.connect(self.pbar.setValue)
@@ -1097,8 +1778,8 @@ class GivEnergyDeploymentWizard(QWizard):
         self.setWindowTitle(f"GivEnergy Raspberry Pi Deployment Wizard v{APP_VERSION}")
         self.setWindowIcon(_app_icon())
         self.setWizardStyle(QWizard.ClassicStyle)
-        self.resize(860, 780)
-        self.setMinimumSize(840, 750)
+        self.resize(880, 830)
+        self.setMinimumSize(850, 780)
         self.deployed_local_url = ""
         self.deployed_ts_ip = ""
         self.deployed_ts_dns = ""
@@ -1106,6 +1787,7 @@ class GivEnergyDeploymentWizard(QWizard):
 
         self.addPage(OSPrepPage())
         self.addPage(DiscoverPiPage())
+        self.addPage(TariffSetupPage())
         self.addPage(CredentialsPage())
         self.addPage(DeployProgressPage())
         self.addPage(FinishPage())

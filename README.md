@@ -1,4 +1,4 @@
-# GivEnergy Local Control (`v1.1.0`)
+# GivEnergy Local Control (`v1.2.0`)
 
 Local, cloud-free monitoring, control, and historic telemetry server for **GivEnergy Hybrid Inverters, Batteries, and EV Chargers**, designed to run 24/7 on a **Raspberry Pi** (Pi 400, Pi 4, Pi 5, etc.) with a standalone **Windows Deployment Installer**.
 
@@ -13,29 +13,31 @@ Local, cloud-free monitoring, control, and historic telemetry server for **GivEn
 - **Historic Telemetry (Storage-Safe SQLite WAL)** — Configurable RAM-batched writes for MicroSD wear-protection (`60s` flush + volatile journald logs) or NVMe/USB SSD tuning (`15s` flush + `fstrim`).
 - **Battery & BMS + Grid Voltage Views** — Per-cell voltage monitoring, BMS status, and grid voltage history charts.
 - **Auto-Discovery & Property Setup** — Automatically scans your local `/24` subnet for GivEnergy Inverters and EV Chargers on first setup and saves configuration to `property_config.json`.
+- **UK Energy Cost & Tariff Monitoring** — 3-tier tariff engine supporting Custom Flat/Dual/ToU rates, UK Supplier Presets (E.ON, EDF, British Gas, OVO, Octopus), and Octopus Energy's live half-hourly API with automatic regional Ofgem Price Cap comparison and a **Days / Weeks / Months / Years / All-Time** Cost & Export Ledger.
 - **Raspberry Pi System & Maintenance Tab** — Displays detected Pi hardware model, CPU temperature, RAM/storage usage, OS software updates with live progress, reboot-required detection, and Restart / Shut Down actions.
 - **Optional Tailscale Remote Access & Funnel** — Guided Tailscale + Tailscale Funnel HTTPS setup with automatic Bearer Token authentication and QR code pairing for secure off-site and Android app access without router port-forwarding or running a VPN client on your phone.
-- **Android Companion App (`givenergy-local-control.apk`)** — Native Jetpack Compose Android app with live power flow, battery/BMS & grid voltage details, interactive historical time-series graphs, and one-scan QR pairing.
-- **Standalone Windows Installer (`GivEnergy-Local-Control-Installer.exe`)** — Full Pi software installation and configuration from the deployment PC.
+- **Android Companion App (`givenergy-local-control.apk`)** — Native Jetpack Compose Android app with live power flow, battery/BMS & grid voltage details, interactive historical time-series graphs, UK energy cost & tariff ledger, and one-scan QR pairing.
+- **Standalone Windows Installer (`GivEnergy-Local-Control-Installer.exe`)** — Full Pi software installation and configuration from the deployment PC with DPAPI-encrypted credential persistence.
 
 ---
 
 ## Quick Start (Windows)
 
-1. Download **`GivEnergy-Local-Control-Installer.exe`** from the [**v1.1.0 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v1.1.0).
-2. Double-click `GivEnergy-Local-Control-Installer.exe` and follow the 5-step wizard:
+1. Download **`GivEnergy-Local-Control-Installer.exe`** from the [**v1.2.0 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v1.2.0).
+2. Double-click `GivEnergy-Local-Control-Installer.exe` and follow the 6-step wizard:
    - **Step 1:** Prepare a Raspberry Pi OS Lite SD/SSD card using Raspberry Pi Imager (auto-detected if installed).
    - **Step 2:** Auto-detect Raspberry Pis on your local network (also shows currently installed version & available upgrades).
-   - **Step 3:** Enter SSH credentials, choose Tailscale remote access, select MicroSD vs. NVMe/SSD optimization, and optionally wipe previous data/config.
-   - **Step 4:** Automated provisioning, Python environment setup, Tailscale login link, and `systemd` service deployment.
-   - **Step 5:** Open the dashboard directly to **⚙ Property Setup** to verify auto-discovered Inverter and EV Charger IPs.
+   - **Step 3:** *(Optional)* Pre-configure your UK Import/Export energy tariff (Custom Flat/Dual, UK Supplier Preset, or Octopus Energy live API).
+   - **Step 4:** Enter SSH credentials (optionally remembered securely on your PC via Windows DPAPI), choose Tailscale remote access, select MicroSD vs. NVMe/SSD optimization, and optionally wipe previous data/config.
+   - **Step 5:** Automated provisioning, Python environment setup, Tailscale login link, and `systemd` service deployment.
+   - **Step 6:** Open the dashboard directly to **⚙ Property Setup** to verify auto-discovered Inverter and EV Charger IPs.
 
 ---
 
 ## Android Companion App
 
-1. Download **`givenergy-local-control.apk`** from the [**v1.1.0 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v1.1.0) and install it on your Android phone (enable *Install unknown apps* if prompted).
-2. Enable **Tailscale Funnel** during Step 3 of the Windows Installer (or view your pairing details in the dashboard under **⚙ Property Setup → Remote Access**).
+1. Download **`givenergy-local-control.apk`** from the [**v1.2.0 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v1.2.0) and install it on your Android phone (enable *Install unknown apps* if prompted).
+2. Enable **Tailscale Funnel** during Step 4 of the Windows Installer (or view your pairing details in the dashboard under **⚙ Property Setup → Remote Access**).
 3. Open **GivEnergy Local Control** on your phone and scan the **QR Code** (or paste your Funnel HTTPS URL and Bearer Token) to pair.
 
 <img src="docs/android-preview.png" width="300" alt="GivEnergy Local Control Android App" />

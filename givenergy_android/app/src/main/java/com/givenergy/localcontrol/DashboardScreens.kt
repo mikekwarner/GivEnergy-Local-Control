@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -30,10 +31,12 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -963,6 +966,195 @@ fun SystemScreen(
                     }
                     OutlinedButton(onClick = onOpenWebFallback, modifier = Modifier.weight(1f)) {
                         Text("Web Dashboard")
+                    }
+                }
+            }
+        }
+
+        item { Spacer(Modifier.height(8.dp)) }
+    }
+}
+
+@Composable
+fun CostsScreen(
+    state: PlantUiState,
+    onRefreshCosts: () -> Unit,
+    onSelectCostPeriod: (String) -> Unit,
+    onOpenTariffWebSetup: () -> Unit,
+) {
+    val cs = state.costSummary
+    val sym = cs.currencySymbol
+    val sub = cs.subUnitSymbol
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        item { Spacer(Modifier.height(4.dp)) }
+
+        item {
+            SectionCard(title = "💷 Today's Estimated Cost & Earnings") {
+                val netPrefix = if (cs.todayNetCostGbp < 0) "-" else ""
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    PowerTile(
+                        title = "Today Net",
+                        value = "$netPrefix$sym${String.format("%.2f", kotlin.math.abs(cs.todayNetCostGbp))}",
+                        sub = "Standing: $sym${String.format("%.2f", cs.todayStandingChargeGbp)}",
+                        accent = AccentGridExport,
+                        modifier = Modifier.weight(1f),
+                    )
+                    PowerTile(
+                        title = "Self-Use Saved",
+                        value = "$sym${String.format("%.2f", cs.todaySavingsGbp)}",
+                        sub = "30d: $sym${String.format("%.2f", cs.thirtyDaySavingsGbp)}",
+                        accent = AccentSolar,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    PowerTile(
+                        title = "Import Outgoing",
+                        value = "$sym${String.format("%.2f", cs.todayImportCostGbp)}",
+                        sub = "Now: ${String.format("%.1f", cs.importRateP)}$sub/kWh",
+                        accent = AccentGridImport,
+                        modifier = Modifier.weight(1f),
+                    )
+                    PowerTile(
+                        title = "Export Income",
+                        value = "$sym${String.format("%.2f", cs.todayExportIncomeGbp)}",
+                        sub = "Now: ${String.format("%.1f", cs.exportRateP)}$sub/kWh",
+                        accent = AccentBat,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+
+        item {
+            SectionCard(title = "⚡ Active UK Tariff Plan (Region ${cs.region})") {
+                StatRow("Import Plan", cs.importLabel, AccentGridImport)
+                StatRow("Export Plan", cs.exportLabel, AccentBat)
+                StatRow("Standing Charge", "${String.format("%.2f", cs.standingChargeP)}$sub/day")
+                StatRow(
+                    "30-Day Net / Export",
+                    "$sym${String.format("%.2f", cs.thirtyDayNetCostGbp)} net  •  $sym${String.format("%.2f", cs.thirtyDayExportIncomeGbp)} earned",
+                )
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(onClick = onRefreshCosts, modifier = Modifier.weight(1f)) {
+                        Text("⟳ Refresh")
+                    }
+                    Button(onClick = onOpenTariffWebSetup, modifier = Modifier.weight(1f)) {
+                        Text("Configure Plan")
+                    }
+                }
+            }
+        }
+
+        item {
+            val periodTitles = mapOf(
+                "days" to "📅 Daily Cost & Export Ledger (30d)",
+                "weeks" to "📅 Weekly Cost & Export Ledger",
+                "months" to "📅 Monthly Cost & Export Ledger",
+                "years" to "📅 Annual Cost & Export Ledger",
+                "all" to "📅 All-Time Cost & Export Summary",
+            )
+            SectionCard(title = periodTitles[cs.selectedPeriod] ?: "📅 Cost & Export Ledger") {
+                val periods = listOf(
+                    "days" to "Days",
+                    "weeks" to "Weeks",
+                    "months" to "Months",
+                    "years" to "Years",
+                    "all" to "All",
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    periods.forEach { (key, lbl) ->
+                        val active = cs.selectedPeriod == key
+                        FilterChip(
+                            selected = active,
+                            onClick = { onSelectCostPeriod(key) },
+                            label = { Text(lbl, fontSize = 11.sp) },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+                if (cs.periodDaysCount > 0) {
+                    val pNetPrefix = if (cs.thirtyDayNetCostGbp < 0) "-" else ""
+                    val pAvgPrefix = if (cs.periodAvgDailyNetGbp < 0) "-" else ""
+                    Text(
+                        "Totals (${cs.periodDaysCount}d):  In ${String.format("%.1f", cs.periodImportKwh)}kWh (${sym}${String.format("%.2f", cs.periodImportCostGbp)})  •  Out ${String.format("%.1f", cs.periodExportKwh)}kWh (${sym}${String.format("%.2f", cs.thirtyDayExportIncomeGbp)})",
+                        color = TextMain,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        "Standing ${sym}${String.format("%.2f", cs.periodStandingChargeGbp)}  •  Net $pNetPrefix$sym${String.format("%.2f", kotlin.math.abs(cs.thirtyDayNetCostGbp))}  •  Avg $pAvgPrefix$sym${String.format("%.2f", kotlin.math.abs(cs.periodAvgDailyNetGbp))}/d  •  Saved $sym${String.format("%.2f", cs.thirtyDaySavingsGbp)}",
+                        color = TextMuted,
+                        fontSize = 11.sp,
+                    )
+                    val capSign = if (cs.periodSavingsVsCapGbp >= 0) "+" else "-"
+                    Text(
+                        "vs Ofgem Price Cap: $capSign$sym${String.format("%.2f", kotlin.math.abs(cs.periodSavingsVsCapGbp))} saved (cap $sym${String.format("%.2f", cs.periodPriceCapCostGbp)})",
+                        color = if (cs.periodSavingsVsCapGbp >= 0) AccentBat else AccentLoad,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(bottom = 8.dp),
+                    )
+                }
+                if (cs.dailyCosts.isEmpty()) {
+                    Text("No cost data yet.", color = TextMuted, fontSize = 13.sp)
+                } else {
+                    val runningTotals = DoubleArray(cs.dailyCosts.size)
+                    var cum = 0.0
+                    for (i in cs.dailyCosts.indices.reversed()) {
+                        cum += cs.dailyCosts[i].netCostGbp
+                        runningTotals[i] = cum
+                    }
+                    cs.dailyCosts.take(24).forEachIndexed { idx, d ->
+                        if (idx > 0) HorizontalDivider(color = BorderCard, modifier = Modifier.padding(vertical = 6.dp))
+                        val dNetPrefix = if (d.netCostGbp < 0) "-" else ""
+                        val dCum = runningTotals[idx]
+                        val dCumPrefix = if (dCum < 0) "-" else ""
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                val daysTag = if (d.daysCount > 1) " (${d.daysCount}d)" else ""
+                                Text("${d.date}$daysTag", color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    "In ${String.format("%.1f", d.importKwh)}kWh (${sym}${String.format("%.2f", d.importCostGbp)})  •  Out ${String.format("%.1f", d.exportKwh)}kWh (${sym}${String.format("%.2f", d.exportIncomeGbp)})  •  SC ${sym}${String.format("%.2f", d.standingChargeGbp)}",
+                                    color = TextMuted,
+                                    fontSize = 11.sp,
+                                )
+                            }
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(
+                                    "Net $dNetPrefix$sym${String.format("%.2f", kotlin.math.abs(d.netCostGbp))}",
+                                    color = if (d.netCostGbp <= 0) AccentBat else TextMain,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                                Text(
+                                    "Solar/Batt $sym${String.format("%.2f", d.savingsGbp)}  •  Total $dCumPrefix$sym${String.format("%.2f", kotlin.math.abs(dCum))}",
+                                    color = AccentSolar,
+                                    fontSize = 11.sp,
+                                )
+                            }
+                        }
                     }
                 }
             }

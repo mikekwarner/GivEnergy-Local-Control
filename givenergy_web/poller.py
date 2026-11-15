@@ -18,7 +18,7 @@ from givenergy_modbus.model.inverter import Model
 from givenergy_modbus.model.plant import PlantCapabilities
 from pymodbus.client import ModbusTcpClient
 
-from givenergy_app.models import BatteryTelemetry, PlantSnapshot
+from givenergy_web.models import BatteryTelemetry, PlantSnapshot
 from givenergy_web.config import PropertyConfig
 from givenergy_web.database import HistoricDatabase
 
@@ -303,7 +303,7 @@ class AsyncPlantPoller:
     def get_full_payload(self) -> dict[str, Any]:
         data = serialize_snapshot(self.snapshot, self.config)
         data["events"] = list(self.events[-15:])
-        data["live_ring"] = self.db.get_live_ring(180)  # Last 15 mins of 5s samples for live sparkline
+        data["live_ring"] = self.db.get_live_ring(1440, max_age_s=7200)  # Last 2 hours of live samples
         return data
 
     async def _ensure_inverter_connected(

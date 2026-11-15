@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from givenergy_app.models import PlantSnapshot
+from givenergy_web.models import PlantSnapshot
 
 
 class HistoricDatabase:
@@ -44,6 +44,7 @@ class HistoricDatabase:
         self.total_samples_recorded = 0
 
         self._init_schema()
+        self._seed_live_ring()
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path), timeout=15.0)
@@ -411,9 +412,12 @@ class HistoricDatabase:
         finally:
             conn.close()
 
-    def get_live_ring(self, max_points: int = 720) -> list[dict[str, Any]]:
+    def get_live_ring(self, max_points: int = 1440, max_age_s: int = 0) -> list[dict[str, Any]]:
         with self._lock:
             pts = list(self._live_ring)
+        if max_age_s > 0 and pts:
+            cutoff = int(time.time()) - max_age_s
+            pts = [p for p in pts if int(p.get("epoch", 0) or 0) >= cutoff]
         return pts[-max_points:]
 
     def get_intraday_series(self, date_str: str | None = None) -> list[dict[str, Any]]:
@@ -521,3 +525,82 @@ class HistoricDatabase:
             "total_samples": self.total_samples_recorded,
             "total_disk_flushes": self.total_disk_flushes,
         }
+
+    def backup_to_file(self, dest_path: Path) -> None:
+        """Flush RAM buffers and write an atomic online SQLite backup to dest_path."""
+        self.flush()
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock:
+            src = self._connect()
+            dst = sqlite3.connect(str(dest_path), timeout=15.0)
+            try:
+                src.backup(dst)
+                dst.commit()
+            finally:
+                dst.close()
+                src.close()
+
+    def replace_from_file(self, src_path: Path) -> None:
+        """Atomically replace the active database from a validated backup SQLite file."""
+        with self._lock:
+            self._live_ring.clear()
+            self._minute_samples.clear()
+            self._five_min_samples.clear()
+            self._pending_1m_rows.clear()
+            self._pending_5m_rows.clear()
+            self._pending_daily_upserts.clear()
+            self._current_minute_key = None
+            self._current_5m_key = None
+
+            src = sqlite3.connect(str(src_path), timeout=15.0)
+            dst = self._connect()
+            try:
+                src.backup(dst)
+                dst.commit()
+            finally:
+                dst.close()
+                src.close()
+        self._init_schema()
+        self._seed_live_ring()
+
+    def _seed_live_ring(self, max_age_s: int = 7200) -> None:
+        """Seed in-memory live ring buffer from the last 2 hours of 1-minute SQLite rows."""
+        cutoff = int(time.time()) - max_age_s
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT ts, epoch, solar_w, pv1_w, pv2_w, battery_w, home_w, grid_w, ev_w,
+                           soc_pct, v_ac1, v_battery, t_inverter, t_battery, cell_delta_mv
+                    FROM telemetry_1m
+                    WHERE epoch >= ?
+                    ORDER BY epoch ASC
+                    """,
+                    (cutoff,),
+                ).fetchall()
+            finally:
+                conn.close()
+            self._live_ring.clear()
+            for r in rows:
+                ts_str = str(r["ts"] or "")
+                self._live_ring.append(
+                    {
+                        "ts": ts_str,
+                        "time": ts_str[11:19] if len(ts_str) >= 19 else ts_str,
+                        "epoch": int(r["epoch"]),
+                        "solar_w": r["solar_w"],
+                        "pv1_w": r["pv1_w"],
+                        "pv2_w": r["pv2_w"],
+                        "battery_w": r["battery_w"],
+                        "home_w": r["home_w"],
+                        "grid_w": r["grid_w"],
+                        "ev_w": r["ev_w"],
+                        "soc_pct": r["soc_pct"],
+                        "v_ac1": r["v_ac1"],
+                        "v_battery": r["v_battery"],
+                        "t_inverter": r["t_inverter"],
+                        "t_battery": r["t_battery"],
+                        "cell_delta_mv": r["cell_delta_mv"],
+                    }
+                )

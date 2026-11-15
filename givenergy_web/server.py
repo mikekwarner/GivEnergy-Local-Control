@@ -9,12 +9,16 @@ import io
 import json
 import os
 import platform
+import re
 import secrets
 import shutil
 import socket
+import sqlite3
 import subprocess
+import tempfile
 import threading
 import time
+import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -404,7 +408,7 @@ async def api_history_range(
 
 
 @app.get("/api/history/daily")
-async def api_history_daily(limit: int = Query(default=90, ge=1, le=1000)):
+async def api_history_daily(limit: int = Query(default=3650, ge=1, le=10000)):
     days = await asyncio.to_thread(db.get_daily_summaries, limit)
     return JSONResponse({"count": len(days), "days": days})
 
@@ -553,6 +557,8 @@ async def api_save_tariff_config(req: TariffConfigRequest):
         price_cap_auto_sync=bool(req.price_cap_auto_sync) if req.price_cap_auto_sync is not None else tariff_config.price_cap_auto_sync,
         price_cap_source="Manual Override" if req.price_cap_auto_sync is False else tariff_config.price_cap_source,
         price_cap_updated_at=time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()) if req.price_cap_auto_sync is False else tariff_config.price_cap_updated_at,
+        comparison_tariffs=list(tariff_config.comparison_tariffs),
+        hidden_comparison_presets=list(tariff_config.hidden_comparison_presets),
     )
     save_tariff_config(DEFAULT_TARIFF_CONFIG_PATH, tariff_config)
     sync_info: dict[str, Any] = {}
@@ -661,6 +667,243 @@ async def api_costs_intraday(date: str | None = Query(default=None, description=
     data["currency_symbol"] = tariff_config.currency_symbol
     data["sub_unit_symbol"] = tariff_config.sub_unit_symbol
     return JSONResponse(data)
+
+
+class CompareTariffCandidate(BaseModel):
+    name: str = ""
+    import_preset_id: str | None = None
+    export_preset_id: str | None = None
+    standing_charge_p: float | None = None
+    custom_import_rate_p: float | None = None
+    custom_export_rate_p: float | None = None
+    custom_import_windows: list[dict[str, Any]] | None = None
+    custom_export_windows: list[dict[str, Any]] | None = None
+
+
+class TariffCompareRequest(BaseModel):
+    days: int = Field(default=30, ge=0, le=36500)
+    candidates: list[CompareTariffCandidate] = Field(default_factory=list)
+
+
+def _side_from_preset(preset: dict[str, Any]) -> TariffSideConfig:
+    return TariffSideConfig(
+        mode="preset",
+        preset_id=str(preset.get("id", "")),
+        label=str(preset.get("name", "")),
+        description=str(preset.get("notes", "")),
+        default_rate_p=float(preset.get("default_rate_p", 24.5)),
+        windows=list(preset.get("windows") or []),
+    )
+
+
+def _format_side_summary(side: TariffSideConfig) -> str:
+    wins = side.windows or []
+    if wins:
+        rates = [float(w.get("rate_p", side.default_rate_p)) for w in wins]
+        lo = min(float(side.default_rate_p), min(rates))
+        hi = max(float(side.default_rate_p), max(rates))
+        return f"{lo:.1f}p–{hi:.1f}p"
+    return f"{float(side.default_rate_p):.2f}p"
+
+
+@app.post("/api/tariffs/compare")
+async def api_tariffs_compare(req: TariffCompareRequest):
+    imp_presets = {p["id"]: p for p in UK_TARIFF_PRESETS.get("import", [])}
+    exp_presets = {p["id"]: p for p in UK_TARIFF_PRESETS.get("export", [])}
+
+    def _run_compare() -> dict[str, Any]:
+        baseline = calculate_daily_costs(db, tariff_config, tariff_cache, req.days)["totals"]
+        days_count = int(baseline.get("days_count", 0) or 0)
+        base_net = float(baseline.get("net_cost_gbp", 0.0) or 0.0)
+
+        candidates = req.candidates
+        if not candidates:
+            hidden = set(tariff_config.hidden_comparison_presets)
+            candidates = [
+                CompareTariffCandidate(
+                    name=f"{p.get('supplier', '')} — {p.get('name', '')}".strip(" —"),
+                    import_preset_id=p["id"],
+                )
+                for p in UK_TARIFF_PRESETS.get("import", [])
+                if p["id"] not in hidden
+            ]
+            for ct in tariff_config.comparison_tariffs:
+                candidates.append(
+                    CompareTariffCandidate(
+                        name=str(ct.get("name", "Custom Tariff")),
+                        custom_import_rate_p=float(ct.get("default_rate_p", 24.5)),
+                        custom_export_rate_p=float(ct["export_rate_p"]) if ct.get("export_rate_p") is not None else None,
+                        standing_charge_p=float(ct["standing_charge_p"]) if ct.get("standing_charge_p") is not None else None,
+                        custom_import_windows=list(ct.get("windows") or []),
+                    )
+                )
+
+        results: list[dict[str, Any]] = []
+        for cand in candidates:
+            imp_p = imp_presets.get(cand.import_preset_id or "") if cand.import_preset_id else None
+            exp_p = exp_presets.get(cand.export_preset_id or "") if cand.export_preset_id else None
+
+            if imp_p is not None:
+                imp_side = _side_from_preset(imp_p)
+            elif cand.custom_import_rate_p is not None:
+                imp_side = TariffSideConfig(
+                    mode="custom",
+                    label=cand.name or "Custom Import",
+                    default_rate_p=float(cand.custom_import_rate_p),
+                    windows=list(cand.custom_import_windows or []),
+                )
+            else:
+                imp_side = tariff_config.import_tariff
+
+            if exp_p is not None:
+                exp_side = _side_from_preset(exp_p)
+            elif cand.custom_export_rate_p is not None:
+                exp_side = TariffSideConfig(
+                    mode="custom",
+                    label=cand.name or "Custom Export",
+                    default_rate_p=float(cand.custom_export_rate_p),
+                    windows=list(cand.custom_export_windows or []),
+                )
+            else:
+                exp_side = tariff_config.export_tariff
+
+            sc_p = (
+                float(cand.standing_charge_p)
+                if cand.standing_charge_p is not None
+                else float(imp_p.get("standing_charge_p", tariff_config.standing_charge_p))
+                if imp_p is not None
+                else float(tariff_config.standing_charge_p)
+            )
+
+            cand_cfg = TariffConfig(
+                currency_symbol=tariff_config.currency_symbol,
+                sub_unit_symbol=tariff_config.sub_unit_symbol,
+                region=tariff_config.region,
+                postcode=tariff_config.postcode,
+                standing_charge_p=sc_p,
+                import_tariff=imp_side,
+                export_tariff=exp_side,
+                price_cap_rate_p=tariff_config.price_cap_rate_p,
+                price_cap_standing_charge_p=tariff_config.price_cap_standing_charge_p,
+            )
+
+            totals = calculate_daily_costs(db, cand_cfg, tariff_cache, req.days)["totals"]
+            cand_net = float(totals.get("net_cost_gbp", 0.0) or 0.0)
+            diff_gbp = round(cand_net - base_net, 2)
+            annual_est_diff = round((diff_gbp / days_count) * 365.0, 2) if days_count > 0 else 0.0
+
+            label = cand.name.strip() or (
+                f"{imp_side.label}" + (f" + {exp_side.label}" if exp_p is not None or cand.custom_export_rate_p is not None else "")
+            )
+            results.append(
+                {
+                    "name": label,
+                    "import_rate_summary": _format_side_summary(imp_side),
+                    "export_rate_summary": _format_side_summary(exp_side),
+                    "standing_charge_p": round(sc_p, 2),
+                    "import_cost_gbp": totals["import_cost_gbp"],
+                    "export_income_gbp": totals["export_income_gbp"],
+                    "standing_charge_gbp": totals["standing_charge_gbp"],
+                    "net_cost_gbp": totals["net_cost_gbp"],
+                    "avg_daily_net_gbp": totals["avg_daily_net_gbp"],
+                    "diff_vs_current_gbp": diff_gbp,
+                    "annual_est_diff_gbp": annual_est_diff,
+                }
+            )
+
+        results.sort(key=lambda r: r["net_cost_gbp"])
+        return {
+            "ok": True,
+            "currency_symbol": tariff_config.currency_symbol,
+            "days": req.days,
+            "days_count": days_count,
+            "current": {
+                "name": f"{tariff_config.import_tariff.label} / {tariff_config.export_tariff.label}",
+                "import_rate_summary": _format_side_summary(tariff_config.import_tariff),
+                "export_rate_summary": _format_side_summary(tariff_config.export_tariff),
+                "standing_charge_p": round(tariff_config.standing_charge_p, 2),
+                **baseline,
+            },
+            "comparisons": results,
+        }
+
+    payload = await asyncio.to_thread(_run_compare)
+    return JSONResponse(payload)
+
+
+class SavedComparisonTariffRequest(BaseModel):
+    name: str
+    default_rate_p: float
+    export_rate_p: float | None = None
+    standing_charge_p: float | None = None
+    windows: list[dict[str, Any]] = Field(default_factory=list)
+
+
+@app.post("/api/tariffs/compare/saved")
+async def api_save_comparison_tariff(req: SavedComparisonTariffRequest):
+    name = req.name.strip()
+    if not name:
+        return JSONResponse({"ok": False, "error": "Tariff name is required."}, status_code=400)
+    clean_windows = []
+    for w in req.windows:
+        if isinstance(w, dict):
+            clean_windows.append(
+                {
+                    "start": str(w.get("start", "00:00"))[:5],
+                    "end": str(w.get("end", "07:00"))[:5],
+                    "rate_p": float(w.get("rate_p", 0.0)),
+                    "label": str(w.get("label", "")).strip() or "Off-Peak",
+                }
+            )
+    item = {
+        "id": f"custom_{secrets.token_hex(4)}",
+        "name": name,
+        "default_rate_p": float(req.default_rate_p),
+        "export_rate_p": float(req.export_rate_p) if req.export_rate_p is not None else None,
+        "standing_charge_p": float(req.standing_charge_p) if req.standing_charge_p is not None else None,
+        "windows": clean_windows,
+    }
+    tariff_config.comparison_tariffs.append(item)
+    save_tariff_config(DEFAULT_TARIFF_CONFIG_PATH, tariff_config)
+    return JSONResponse(
+        {
+            "ok": True,
+            "item": item,
+            "comparison_tariffs": tariff_config.comparison_tariffs,
+            "hidden_comparison_presets": tariff_config.hidden_comparison_presets,
+        }
+    )
+
+
+@app.delete("/api/tariffs/compare/saved/{item_id}")
+async def api_delete_comparison_tariff(item_id: str):
+    before = len(tariff_config.comparison_tariffs)
+    tariff_config.comparison_tariffs = [t for t in tariff_config.comparison_tariffs if t.get("id") != item_id]
+    if len(tariff_config.comparison_tariffs) == before:
+        preset_ids = {p["id"] for p in UK_TARIFF_PRESETS.get("import", [])}
+        if item_id in preset_ids and item_id not in tariff_config.hidden_comparison_presets:
+            tariff_config.hidden_comparison_presets.append(item_id)
+    save_tariff_config(DEFAULT_TARIFF_CONFIG_PATH, tariff_config)
+    return JSONResponse(
+        {
+            "ok": True,
+            "comparison_tariffs": tariff_config.comparison_tariffs,
+            "hidden_comparison_presets": tariff_config.hidden_comparison_presets,
+        }
+    )
+
+
+@app.post("/api/tariffs/compare/reset-presets")
+async def api_reset_comparison_presets():
+    tariff_config.hidden_comparison_presets = []
+    save_tariff_config(DEFAULT_TARIFF_CONFIG_PATH, tariff_config)
+    return JSONResponse(
+        {
+            "ok": True,
+            "comparison_tariffs": tariff_config.comparison_tariffs,
+            "hidden_comparison_presets": tariff_config.hidden_comparison_presets,
+        }
+    )
 
 
 class TokenVerifyRequest(BaseModel):
@@ -947,6 +1190,193 @@ async def api_poll_now():
 async def api_flush_db():
     await asyncio.to_thread(db.flush)
     return JSONResponse({"ok": True, "stats": db.get_db_stats()})
+
+
+@app.get("/api/backup/export")
+async def api_backup_export(
+    include_config: bool = Query(True),
+    include_history: bool = Query(True),
+):
+    if not include_config and not include_history:
+        return JSONResponse({"ok": False, "error": "Select configuration and/or historic data to export."}, status_code=400)
+
+    def _build_backup_zip() -> tuple[bytes, str]:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_root = Path(tmpdir)
+            zip_buf = io.BytesIO()
+            stats = db.get_db_stats() if include_history else {}
+            manifest = {
+                "format_version": 1,
+                "app_version": APP_VERSION,
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "hostname": socket.gethostname(),
+                "property_name": poller.config.property_name,
+                "includes": {
+                    "config": bool(include_config),
+                    "history": bool(include_history),
+                },
+                "stats": stats,
+            }
+
+            with zipfile.ZipFile(zip_buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("manifest.json", json.dumps(manifest, indent=2))
+                if include_config:
+                    zf.writestr("property_config.json", json.dumps(asdict(poller.config), indent=2))
+                    zf.writestr("tariff_config.json", json.dumps(asdict(tariff_config), indent=2))
+                if include_history:
+                    tmp_db = tmp_root / "givenergy_history.db"
+                    db.backup_to_file(tmp_db)
+                    zf.write(tmp_db, arcname="givenergy_history.db")
+
+            slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", (poller.config.property_name or "home").strip()).strip("-") or "home"
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            return zip_buf.getvalue(), f"givenergy-backup-{slug}-{stamp}.zip"
+
+    payload_bytes, filename = await asyncio.to_thread(_build_backup_zip)
+    return Response(
+        content=payload_bytes,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@app.post("/api/backup/import")
+async def api_backup_import(
+    request: Request,
+    restore_config: bool = Query(True),
+    restore_history: bool = Query(True),
+    preserve_api_token: bool = Query(False),
+):
+    global tariff_config
+    if not restore_config and not restore_history:
+        return JSONResponse({"ok": False, "error": "Select configuration and/or historic data to restore."}, status_code=400)
+
+    body = await request.body()
+    max_bytes = 512 * 1024 * 1024
+    if not body:
+        return JSONResponse({"ok": False, "error": "Empty backup file uploaded."}, status_code=400)
+    if len(body) > max_bytes:
+        return JSONResponse({"ok": False, "error": "Backup file exceeds 512 MB limit."}, status_code=413)
+
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(body))
+    except zipfile.BadZipFile:
+        return JSONResponse({"ok": False, "error": "Uploaded file is not a valid .zip backup archive."}, status_code=400)
+
+    with zf, tempfile.TemporaryDirectory() as tmpdir:
+        names = set(zf.namelist())
+        manifest: dict[str, Any] = {}
+        if "manifest.json" in names:
+            try:
+                manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+                if not isinstance(manifest, dict):
+                    return JSONResponse({"ok": False, "error": "Invalid manifest.json in backup."}, status_code=400)
+            except Exception as exc:
+                return JSONResponse({"ok": False, "error": f"Corrupt manifest.json: {exc}"}, status_code=400)
+
+        prop_raw: dict[str, Any] | None = None
+        tariff_raw: dict[str, Any] | None = None
+        if restore_config:
+            if "property_config.json" not in names and "tariff_config.json" not in names:
+                return JSONResponse(
+                    {"ok": False, "error": "Backup archive does not contain configuration files."},
+                    status_code=400,
+                )
+            if "property_config.json" in names:
+                try:
+                    parsed = json.loads(zf.read("property_config.json").decode("utf-8"))
+                    if not isinstance(parsed, dict):
+                        raise ValueError("property_config.json must be a JSON object")
+                    prop_raw = parsed
+                except Exception as exc:
+                    return JSONResponse({"ok": False, "error": f"Invalid property_config.json: {exc}"}, status_code=400)
+            if "tariff_config.json" in names:
+                try:
+                    parsed = json.loads(zf.read("tariff_config.json").decode("utf-8"))
+                    if not isinstance(parsed, dict):
+                        raise ValueError("tariff_config.json must be a JSON object")
+                    tariff_raw = parsed
+                except Exception as exc:
+                    return JSONResponse({"ok": False, "error": f"Invalid tariff_config.json: {exc}"}, status_code=400)
+
+        tmp_db_path: Path | None = None
+        if restore_history:
+            if "givenergy_history.db" not in names:
+                return JSONResponse(
+                    {"ok": False, "error": "Backup archive does not contain historic database (givenergy_history.db)."},
+                    status_code=400,
+                )
+            info = zf.getinfo("givenergy_history.db")
+            if info.file_size > max_bytes:
+                return JSONResponse({"ok": False, "error": "Database inside backup exceeds 512 MB limit."}, status_code=413)
+            tmp_db_path = Path(tmpdir) / "givenergy_history.db"
+            with zf.open(info) as src_f, tmp_db_path.open("wb") as dst_f:
+                shutil.copyfileobj(src_f, dst_f)
+
+            def _validate_sqlite(path: Path) -> str | None:
+                conn = sqlite3.connect(str(path), timeout=10.0)
+                try:
+                    chk = conn.execute("PRAGMA integrity_check;").fetchone()
+                    if not chk or str(chk[0]).lower() != "ok":
+                        return f"SQLite integrity check failed: {chk[0] if chk else 'unknown'}"
+                    tables = {
+                        row[0]
+                        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+                    }
+                    required = {"daily_summary", "telemetry_1m", "telemetry_5m"}
+                    missing = required - tables
+                    if missing:
+                        return f"Backup database missing required tables: {', '.join(sorted(missing))}"
+                    return None
+                except Exception as exc:
+                    return f"Invalid SQLite database: {exc}"
+                finally:
+                    conn.close()
+
+            err = await asyncio.to_thread(_validate_sqlite, tmp_db_path)
+            if err:
+                return JSONResponse({"ok": False, "error": err}, status_code=400)
+
+        # Apply validated restore
+        if restore_history and tmp_db_path is not None:
+            await asyncio.to_thread(db.replace_from_file, tmp_db_path)
+            await asyncio.to_thread(tariff_cache._init_table)
+
+        restored_cfg = False
+        restored_tariff = False
+        if restore_config:
+            if prop_raw is not None:
+                valid_fields = set(PropertyConfig.__dataclass_fields__.keys())
+                filtered = {k: v for k, v in prop_raw.items() if k in valid_fields}
+                new_cfg = PropertyConfig(**filtered)
+                if preserve_api_token and poller.config.api_token:
+                    new_cfg.api_token = poller.config.api_token
+                elif not new_cfg.api_token:
+                    new_cfg.api_token = poller.config.api_token or secrets.token_urlsafe(32)
+                save_config(DEFAULT_CONFIG_PATH, new_cfg)
+                await poller.apply_config(new_cfg)
+                restored_cfg = True
+
+            if tariff_raw is not None:
+                DEFAULT_TARIFF_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+                DEFAULT_TARIFF_CONFIG_PATH.write_text(json.dumps(tariff_raw, indent=2), encoding="utf-8")
+                tariff_config = load_tariff_config(DEFAULT_TARIFF_CONFIG_PATH)
+                restored_tariff = True
+
+    stats = db.get_db_stats()
+    return JSONResponse(
+        {
+            "ok": True,
+            "restored_config": restored_cfg,
+            "restored_tariff": restored_tariff,
+            "restored_history": bool(restore_history),
+            "stats": stats,
+            "manifest": manifest,
+        }
+    )
 
 
 @app.websocket("/ws/live")

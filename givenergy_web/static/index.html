@@ -725,7 +725,7 @@
     <div class="brand">
       <div class="brand-icon">⚡</div>
       <div>
-        <div class="brand-title" id="hdr-title"><span id="hdr-title-text">GivEnergy Local Control &amp; Historic Server</span> <span id="hdr-version" style="font-size:11px; font-weight:600; color:#93C5FD; background:#111827; border:1px solid #2E3F5E; border-radius:999px; padding:1px 7px; margin-left:6px; vertical-align:middle;">v1.1.0</span></div>
+        <div class="brand-title" id="hdr-title"><span id="hdr-title-text">GivEnergy Local Control &amp; Historic Server</span> <span id="hdr-version" style="font-size:11px; font-weight:600; color:#93C5FD; background:#111827; border:1px solid #2E3F5E; border-radius:999px; padding:1px 7px; margin-left:6px; vertical-align:middle;">v1.3.0</span></div>
         <div class="brand-sub" id="hdr-sub">Raspberry Pi • Auto-Adaptive Local Telemetry &amp; Control</div>
       </div>
     </div>
@@ -826,7 +826,7 @@
         <div class="panel">
           <div class="panel-header">
             <div>
-              <div class="panel-title">Real-Time Power &amp; Battery SoC Timeline (5-Second Resolution)</div>
+              <div class="panel-title">Real-Time Power &amp; Battery SoC Timeline (Last 2 Hours • 5-Second Resolution)</div>
               <div class="panel-sub">Hover over the chart to inspect exact wattage and battery state of charge</div>
             </div>
             <div class="legend-bar">
@@ -877,7 +877,23 @@
           </div>
 
           <div>
-            <div class="panel-title" style="margin-bottom:8px;">Daily Energy Totals Comparison (kWh per Day)</div>
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:8px;">
+              <div>
+                <div class="panel-title" id="energy-bar-title">Daily Energy Totals Comparison (kWh per Day)</div>
+                <div class="legend-bar" style="margin-top:4px;">
+                  <span class="legend-item"><span class="legend-swatch" style="background:#F59E0B"></span>Solar PV</span>
+                  <span class="legend-item"><span class="legend-swatch" style="background:#8B5CF6"></span>Home Load</span>
+                  <span class="legend-item"><span class="legend-swatch" style="background:#10B981"></span>Battery Dischg</span>
+                  <span class="legend-item"><span class="legend-swatch" style="background:#F43F5E"></span>Grid Import</span>
+                </div>
+              </div>
+              <div id="energy-bar-period-buttons" style="display:flex; gap:6px; flex-wrap:wrap;">
+                <button class="btn primary" onclick="setEnergyBarPeriod('days', this)">Days</button>
+                <button class="btn" onclick="setEnergyBarPeriod('weeks', this)">Weeks</button>
+                <button class="btn" onclick="setEnergyBarPeriod('months', this)">Months</button>
+                <button class="btn" onclick="setEnergyBarPeriod('years', this)">Years</button>
+              </div>
+            </div>
             <div class="canvas-wrap">
               <canvas id="dailyBarCanvas" height="230"></canvas>
               <div class="chart-tooltip" id="dailyBarTooltip"></div>
@@ -886,17 +902,23 @@
         </div>
 
         <div class="panel">
-          <div class="panel-header">
+          <div class="panel-header" style="flex-wrap:wrap; gap:10px;">
             <div>
-              <div class="panel-title">Daily Energy Ledger &amp; Peak Demand Summary</div>
+              <div class="panel-title" id="energy-ledger-title">Daily Energy Ledger &amp; Peak Demand Summary</div>
               <div class="panel-sub">Automatically aggregated every minute and persisted to `/opt/givenergy-web/data/givenergy_history.db`</div>
+            </div>
+            <div id="energy-ledger-period-buttons" style="display:flex; gap:6px; flex-wrap:wrap;">
+              <button class="btn primary" onclick="setEnergyLedgerPeriod('days', this)">Days</button>
+              <button class="btn" onclick="setEnergyLedgerPeriod('weeks', this)">Weeks</button>
+              <button class="btn" onclick="setEnergyLedgerPeriod('months', this)">Months</button>
+              <button class="btn" onclick="setEnergyLedgerPeriod('years', this)">Years</button>
             </div>
           </div>
           <div class="data-table-wrap">
             <table class="data-table" id="daily-ledger-table">
               <thead>
                 <tr>
-                  <th>Date</th>
+                  <th>Period</th>
                   <th>Solar PV</th>
                   <th>PV1 / PV2</th>
                   <th>Home Load</th>
@@ -1153,6 +1175,90 @@
             </div>
           </div>
         </div>
+
+        <!-- Tariff Comparison Area -->
+        <div class="panel" id="panel-tariff-comparison" style="margin-top:16px;">
+          <div class="panel-header" style="flex-wrap:wrap; gap:10px;">
+            <div>
+              <div class="panel-title">⚖️ Tariff Comparison (What-If Calculator)</div>
+              <div class="panel-sub">Compare your current tariff's actual historic costs against other UK tariffs or a custom quote using your recorded 5-minute &amp; daily telemetry</div>
+            </div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+              <select id="cmp-days-select" style="font-size:12px;">
+                <option value="7">Last 7 Days</option>
+                <option value="30" selected>Last 30 Days</option>
+                <option value="90">Last 90 Days</option>
+                <option value="365">Last 365 Days</option>
+                <option value="0">All Time</option>
+              </select>
+              <button class="btn primary" id="btn-cmp-selected" onclick="runTariffComparison(false)">⚖️ Compare Selected</button>
+              <button class="btn success" id="btn-cmp-all" onclick="runTariffComparison(true)">⚡ Compare All UK Presets</button>
+            </div>
+          </div>
+
+          <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:14px; margin-bottom:14px;">
+            <div class="ctrl-group" style="margin-bottom:0; min-width:0;">
+              <div class="ctrl-label" style="margin-bottom:6px;">
+                <span>Select Import Tariffs to Compare</span>
+                <span style="display:flex; gap:8px; align-items:center;">
+                  <button class="btn" id="btn-cmp-reset-presets" style="display:none; padding:2px 7px; font-size:10.5px;" onclick="resetComparisonPresets()">↺ Restore Built-in</button>
+                  <span style="font-size:11px; color:var(--text-muted);">Check 1 or more</span>
+                </span>
+              </div>
+              <div id="cmp-preset-list" style="max-height:190px; overflow-y:auto; display:flex; flex-direction:column; gap:5px; font-size:12px; padding:6px 8px; background:rgba(9,13,22,0.7); border:1px solid var(--border); border-radius:6px;">
+                <span style="color:var(--text-muted);">Loading tariff presets…</span>
+              </div>
+            </div>
+
+            <div class="ctrl-group" style="margin-bottom:0; min-width:0; overflow:hidden;">
+              <div class="ctrl-label" style="margin-bottom:6px;">
+                <span>Export &amp; Custom Tariff Quote (Optional)</span>
+              </div>
+              <div class="input-row" style="margin-bottom:8px;">
+                <span style="width:105px; flex-shrink:0; color:var(--text-muted); font-size:12px;">Export Tariff:</span>
+                <select id="cmp-export-preset" style="flex:1; min-width:0; font-size:12px;">
+                  <option value="">Use My Current Export Tariff</option>
+                </select>
+              </div>
+              <div style="font-size:11.5px; color:var(--text-muted); margin-bottom:6px;">Optional Custom What-If Quote (with Off-Peak Windows):</div>
+              <div style="display:grid; grid-template-columns:minmax(0,1.5fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr); gap:6px; width:100%; box-sizing:border-box;">
+                <input type="text" id="cmp-custom-name" placeholder="Name (e.g. EV Deal)" style="width:100%; min-width:0; box-sizing:border-box; background:#090D16; color:var(--text-main); border:1px solid var(--border-bright); border-radius:6px; padding:5px 7px; font-size:12px;" />
+                <input type="number" step="0.01" id="cmp-custom-imp" placeholder="Day p" title="Day / default import rate (p/kWh)" style="width:100%; min-width:0; box-sizing:border-box; font-size:12px;" />
+                <input type="number" step="0.01" id="cmp-custom-exp" placeholder="Exp p" title="Optional export rate (p/kWh)" style="width:100%; min-width:0; box-sizing:border-box; font-size:12px;" />
+                <input type="number" step="0.01" id="cmp-custom-sc" placeholder="SC p/d" title="Optional standing charge (p/day)" style="width:100%; min-width:0; box-sizing:border-box; font-size:12px;" />
+              </div>
+              <div style="display:flex; justify-content:space-between; align-items:center; margin:8px 0 4px; flex-wrap:wrap; gap:6px;">
+                <span style="font-size:11.5px; color:var(--text-muted);">Off-Peak / Time-of-Use Windows:</span>
+                <div style="display:flex; gap:6px;">
+                  <button class="btn" style="padding:3px 8px; font-size:11px;" onclick="addCustomCmpWindow()">+ Add Off-Peak Window</button>
+                  <button class="btn primary" style="padding:3px 9px; font-size:11px;" onclick="saveCustomComparisonTariff()">💾 Save to List</button>
+                </div>
+              </div>
+              <div id="cmp-custom-windows-list" style="display:flex; flex-direction:column; gap:5px;"></div>
+            </div>
+          </div>
+
+          <div class="table-wrap" style="max-height:420px; overflow:auto;">
+            <table>
+              <thead>
+                <tr>
+                  <th>Tariff</th>
+                  <th>Rates (Imp / Exp / SC)</th>
+                  <th>Imp Cost</th>
+                  <th>Exp Earn</th>
+                  <th>Standing</th>
+                  <th>Net Cost</th>
+                  <th>Avg / Day</th>
+                  <th>vs Current</th>
+                  <th>Est. Annual Diff</th>
+                </tr>
+              </thead>
+              <tbody id="cmp-results-tbody">
+                <tr><td colspan="9" style="text-align:center; color:var(--text-muted);">Select tariffs above or click <b>⚡ Compare All UK Presets</b> to compare against your current tariff.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </section>
 
       <!-- TAB 3: BATTERY & 16-CELL BMS -->
@@ -1397,6 +1503,43 @@
             </div>
           </div>
         </div>
+
+        <div class="panel" id="panel-backup-restore" style="margin-top:16px;">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title">💾 System Backup &amp; Restore</div>
+              <div class="panel-sub">Export your property configuration, tariff settings, and full historic SQLite database to a portable `.zip` archive, or restore onto replacement hardware.</div>
+            </div>
+          </div>
+          <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:16px;">
+            <div class="ctrl-group" style="margin-bottom:0;">
+              <div class="ctrl-label" style="margin-bottom:8px;">
+                <span>Export Backup</span>
+              </div>
+              <div style="display:flex; flex-direction:column; gap:6px; font-size:12.5px; margin-bottom:12px;">
+                <label style="cursor:pointer;"><input type="checkbox" id="bak-exp-cfg" checked /> Include Configuration (`property_config.json` &amp; `tariff_config.json`)</label>
+                <label style="cursor:pointer;"><input type="checkbox" id="bak-exp-hist" checked /> Include Historic Database (`givenergy_history.db`)</label>
+              </div>
+              <button class="btn primary" id="btn-bak-export" onclick="exportSystemBackup()">⬇ Download Backup (.zip)</button>
+            </div>
+
+            <div class="ctrl-group" style="margin-bottom:0;">
+              <div class="ctrl-label" style="margin-bottom:8px;">
+                <span>Restore / Import Backup</span>
+              </div>
+              <div style="margin-bottom:10px;">
+                <input type="file" id="bak-imp-file" accept=".zip,application/zip" style="width:100%; font-size:12px; color:var(--text-main); background:#090D16; border:1px solid var(--border-bright); border-radius:6px; padding:6px;" />
+              </div>
+              <div style="display:flex; flex-direction:column; gap:6px; font-size:12.5px; margin-bottom:12px;">
+                <label style="cursor:pointer;"><input type="checkbox" id="bak-imp-cfg" checked /> Restore Configuration (Property &amp; Tariffs)</label>
+                <label style="cursor:pointer;"><input type="checkbox" id="bak-imp-hist" checked /> Restore Historic Database (replaces current history)</label>
+                <label style="cursor:pointer;"><input type="checkbox" id="bak-imp-keep-tok" /> Keep this device's current Remote API Token</label>
+              </div>
+              <button class="btn danger" id="btn-bak-import" onclick="importSystemBackup()">⬆ Restore Backup</button>
+            </div>
+          </div>
+          <div id="bak-status-msg" style="margin-top:12px; font-size:12px; color:var(--text-muted); line-height:1.5;"></div>
+        </div>
       </section>
     </main>
 
@@ -1526,6 +1669,20 @@
 
         <div class="ctrl-group">
           <div class="ctrl-label"><span>Clock Sync &amp; Connection</span></div>
+          <div id="clock-sync-readout" style="background:rgba(15,23,42,0.55); border:1px solid var(--border); border-radius:8px; padding:7px 10px; margin-bottom:8px; font-size:11.5px; font-family:'JetBrains Mono', monospace; display:flex; flex-direction:column; gap:3px;">
+            <div style="display:flex; justify-content:space-between;">
+              <span style="color:var(--text-muted);">Local Time:</span>
+              <span id="clk-local">—</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; gap:6px;">
+              <span style="color:var(--text-muted);">Inverter:</span>
+              <span id="clk-inv">—</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; gap:6px;">
+              <span style="color:var(--text-muted);">EV Charger:</span>
+              <span id="clk-evc">—</span>
+            </div>
+          </div>
           <div class="btn-row">
             <button class="btn" onclick="sendControl('inverter','sync_time',{},'Sync Inverter RTC Clock')">🕒 Sync Inv</button>
             <button class="btn" onclick="sendControl('evc','sync_time',{},'Sync EV Charger RTC Clock')">🕒 Sync EVC</button>
@@ -1729,6 +1886,7 @@
 
       document.getElementById('live-updated-pill').textContent =
         `Last Poll: ${inv.last_updated || evc.last_updated || data.server_time}`;
+      updateClockSyncReadout(inv, evc, data);
 
       // 6 KPI Cards
       document.getElementById('kpi-solar-w').textContent = `${inv.p_pv_total || 0} W`;
@@ -1833,6 +1991,47 @@
       updateBmsTab(bats, inv);
       updateDetailsTab(inv, bat, evc, sys);
       drawLiveTimelineChart();
+    }
+
+    function _formatClockDrift(devStr, refDate) {
+      if (!devStr) return { text: '—', color: 'var(--text-muted)' };
+      const parsed = new Date(devStr.replace(' ', 'T'));
+      if (isNaN(parsed.getTime())) return { text: devStr, color: 'var(--text-main)' };
+      const diffS = Math.round((parsed.getTime() - refDate.getTime()) / 1000);
+      const absS = Math.abs(diffS);
+      const shortT = devStr.slice(11, 19) || devStr;
+      let driftTxt = '';
+      if (absS <= 15) {
+        driftTxt = '✓ in sync';
+      } else if (absS < 60) {
+        driftTxt = `${diffS > 0 ? '+' : '-'}${absS}s`;
+      } else if (absS < 3600) {
+        const m = Math.floor(absS / 60);
+        const s = absS % 60;
+        driftTxt = `${diffS > 0 ? '+' : '-'}${m}m${s ? s + 's' : ''}`;
+      } else {
+        const h = Math.floor(absS / 3600);
+        const m = Math.floor((absS % 3600) / 60);
+        driftTxt = `${diffS > 0 ? '+' : '-'}${h}h${m}m`;
+      }
+      const color = absS <= 30 ? '#34D399' : (absS <= 120 ? '#FBBF24' : '#FB7185');
+      return { text: `${shortT} (${driftTxt})`, color };
+    }
+
+    function updateClockSyncReadout(inv, evc, data) {
+      const now = new Date();
+      const pad2 = n => String(n).padStart(2, '0');
+      const localStr = `${now.getFullYear()}-${pad2(now.getMonth()+1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())}`;
+      const elLoc = document.getElementById('clk-local');
+      if (elLoc) elLoc.textContent = localStr.slice(11);
+
+      const invRes = _formatClockDrift(inv?.system_time, now);
+      const elInv = document.getElementById('clk-inv');
+      if (elInv) { elInv.textContent = invRes.text; elInv.style.color = invRes.color; }
+
+      const evcRes = _formatClockDrift(evc?.system_time, now);
+      const elEvc = document.getElementById('clk-evc');
+      if (elEvc) { elEvc.textContent = evcRes.text; elEvc.style.color = evcRes.color; }
     }
 
     function getSelectedBattery() {
@@ -2448,7 +2647,7 @@
         }
         const [resSeries, resDaily] = await Promise.all([
           fetch(rangeUrl),
-          fetch('/api/history/daily?limit=90')
+          fetch('/api/history/daily?limit=3650')
         ]);
 
         if (resSeries.ok) {
@@ -2533,8 +2732,120 @@
       );
     }
 
+    let _energyBarPeriod = 'days';
+    let _energyLedgerPeriod = 'days';
+    let _dailyBarHitboxes = [];
+
+    function _isoWeekKey(dateStr) {
+      const dt = new Date(dateStr + 'T12:00:00');
+      const tmp = new Date(Date.UTC(dt.getFullYear(), dt.getMonth(), dt.getDate()));
+      const dayNum = tmp.getUTCDay() || 7;
+      tmp.setUTCDate(tmp.getUTCDate() + 4 - dayNum);
+      const yearStart = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 1));
+      const weekNo = Math.ceil((((tmp - yearStart) / 86400000) + 1) / 7);
+      return `${tmp.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
+    }
+
+    function aggregateEnergySummaries(rows, period) {
+      if (!rows || !rows.length) return [];
+      if (period === 'days') {
+        return rows.map(d => ({ ...d, label: d.date_str, shortLabel: d.date_str.slice(5), days_count: 1 }));
+      }
+      const buckets = new Map();
+      const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      for (const d of rows) {
+        const ds = d.date_str || '';
+        if (!ds) continue;
+        let key = ds, label = ds, shortLabel = ds;
+        if (period === 'weeks') {
+          key = _isoWeekKey(ds);
+          label = key;
+          shortLabel = key.slice(2);
+        } else if (period === 'months') {
+          key = ds.slice(0, 7);
+          const [yy, mm] = key.split('-');
+          const mn = monthNames[Math.max(0, (parseInt(mm, 10) || 1) - 1)] || mm;
+          label = `${mn} ${yy}`;
+          shortLabel = `${mn} '${yy.slice(2)}`;
+        } else if (period === 'years') {
+          key = ds.slice(0, 4);
+          label = key;
+          shortLabel = key;
+        }
+        let b = buckets.get(key);
+        if (!b) {
+          b = {
+            date_str: key,
+            label,
+            shortLabel,
+            days_count: 0,
+            pv_kwh: 0, pv1_kwh: 0, pv2_kwh: 0,
+            consumption_kwh: 0, self_consumption_kwh: 0,
+            grid_import_kwh: 0, grid_export_kwh: 0,
+            battery_charge_kwh: 0, battery_discharge_kwh: 0,
+            ev_session_kwh: 0,
+            peak_solar_w: 0, peak_load_w: 0,
+            min_soc_pct: 999, max_soc_pct: 0,
+            max_cell_delta_mv: 0,
+          };
+          buckets.set(key, b);
+        }
+        b.days_count += 1;
+        b.pv_kwh += Number(d.pv_kwh || 0);
+        b.pv1_kwh += Number(d.pv1_kwh || 0);
+        b.pv2_kwh += Number(d.pv2_kwh || 0);
+        b.consumption_kwh += Number(d.consumption_kwh || 0);
+        b.self_consumption_kwh += Number(d.self_consumption_kwh || 0);
+        b.grid_import_kwh += Number(d.grid_import_kwh || 0);
+        b.grid_export_kwh += Number(d.grid_export_kwh || 0);
+        b.battery_charge_kwh += Number(d.battery_charge_kwh || 0);
+        b.battery_discharge_kwh += Number(d.battery_discharge_kwh || 0);
+        b.ev_session_kwh += Number(d.ev_session_kwh || 0);
+        b.peak_solar_w = Math.max(b.peak_solar_w, Number(d.peak_solar_w || 0));
+        b.peak_load_w = Math.max(b.peak_load_w, Number(d.peak_load_w || 0));
+        const mnSoc = Number(d.min_soc_pct || 0);
+        if (mnSoc > 0) b.min_soc_pct = Math.min(b.min_soc_pct, mnSoc);
+        b.max_soc_pct = Math.max(b.max_soc_pct, Number(d.max_soc_pct || 0));
+        b.max_cell_delta_mv = Math.max(b.max_cell_delta_mv, Number(d.max_cell_delta_mv || 0));
+      }
+      return Array.from(buckets.values())
+        .sort((a, b) => b.date_str.localeCompare(a.date_str))
+        .map(b => ({ ...b, min_soc_pct: b.min_soc_pct === 999 ? 0 : b.min_soc_pct }));
+    }
+
+    function setEnergyBarPeriod(period, btnEl) {
+      _energyBarPeriod = period || 'days';
+      const wrap = document.getElementById('energy-bar-period-buttons');
+      if (wrap) wrap.querySelectorAll('button').forEach(b => b.classList.toggle('primary', b === btnEl));
+      const titles = {
+        days: 'Daily Energy Totals Comparison (kWh per Day)',
+        weeks: 'Weekly Energy Totals Comparison (kWh per Week)',
+        months: 'Monthly Energy Totals Comparison (kWh per Month)',
+        years: 'Annual Energy Totals Comparison (kWh per Year)',
+      };
+      const tEl = document.getElementById('energy-bar-title');
+      if (tEl) tEl.textContent = titles[_energyBarPeriod] || titles.days;
+      drawDailyBarChart();
+    }
+
+    function setEnergyLedgerPeriod(period, btnEl) {
+      _energyLedgerPeriod = period || 'days';
+      const wrap = document.getElementById('energy-ledger-period-buttons');
+      if (wrap) wrap.querySelectorAll('button').forEach(b => b.classList.toggle('primary', b === btnEl));
+      const titles = {
+        days: 'Daily Energy Ledger & Peak Demand Summary',
+        weeks: 'Weekly Energy Ledger & Peak Demand Summary',
+        months: 'Monthly Energy Ledger & Peak Demand Summary',
+        years: 'Annual Energy Ledger & Peak Demand Summary',
+      };
+      const tEl = document.getElementById('energy-ledger-title');
+      if (tEl) tEl.textContent = titles[_energyLedgerPeriod] || titles.days;
+      renderDailyLedgerTable();
+    }
+
     function drawDailyBarChart() {
       const canvas = document.getElementById('dailyBarCanvas');
+      const tooltip = document.getElementById('dailyBarTooltip');
       if (!canvas) return;
       const dpr = window.devicePixelRatio || 1;
       const rect = canvas.getBoundingClientRect();
@@ -2551,11 +2862,14 @@
       ctx.fillStyle = '#0B101D';
       ctx.fillRect(0, 0, W, H);
 
-      const days = dailySummaries.slice(0, 14).reverse();
+      const agg = aggregateEnergySummaries(dailySummaries, _energyBarPeriod);
+      const maxCols = _energyBarPeriod === 'days' ? 14 : 12;
+      const days = agg.slice(0, maxCols).reverse();
+      _dailyBarHitboxes = [];
       if (days.length === 0) {
         ctx.fillStyle = '#64748B';
         ctx.textAlign = 'center';
-        ctx.fillText('No daily summaries yet', W / 2, H / 2);
+        ctx.fillText('No energy summaries yet', W / 2, H / 2);
         ctx.restore();
         return;
       }
@@ -2566,47 +2880,105 @@
 
       let maxKwh = 10;
       for (const d of days) {
-        maxKwh = Math.max(maxKwh, d.pv_kwh || 0, d.consumption_kwh || 0, d.grid_import_kwh || 0, d.battery_charge_kwh || 0);
+        maxKwh = Math.max(maxKwh, d.pv_kwh || 0, d.consumption_kwh || 0, d.grid_import_kwh || 0, d.battery_discharge_kwh || 0);
       }
       maxKwh = Math.ceil(maxKwh / 5) * 5;
 
+      // Horizontal grid lines + y-axis labels
+      ctx.strokeStyle = 'rgba(148,163,184,0.12)';
+      ctx.lineWidth = 1;
+      ctx.font = '10px JetBrains Mono, monospace';
+      ctx.fillStyle = '#64748B';
+      for (let g = 0; g <= 4; g++) {
+        const gy = pad.t + (ch * g) / 4;
+        ctx.beginPath();
+        ctx.moveTo(pad.l, gy);
+        ctx.lineTo(pad.l + cw, gy);
+        ctx.stroke();
+        const val = (maxKwh * (4 - g)) / 4;
+        ctx.textAlign = 'right';
+        ctx.fillText(`${val.toFixed(0)}`, pad.l - 6, gy + 3);
+      }
+
       const groupW = cw / days.length;
-      const barW = Math.min(14, (groupW - 10) / 4);
+      const barW = Math.min(18, Math.max(4, (groupW - 10) / 4));
 
       for (let i = 0; i < days.length; i++) {
         const d = days[i];
         const gx = pad.l + i * groupW + groupW / 2;
         const bars = [
-          { v: d.pv_kwh || 0, c: '#F59E0B' },
-          { v: d.consumption_kwh || 0, c: '#8B5CF6' },
-          { v: d.battery_discharge_kwh || 0, c: '#10B981' },
-          { v: d.grid_import_kwh || 0, c: '#F43F5E' },
+          { name: 'Solar PV', v: d.pv_kwh || 0, c: '#F59E0B' },
+          { name: 'Home Load', v: d.consumption_kwh || 0, c: '#8B5CF6' },
+          { name: 'Battery Dischg', v: d.battery_discharge_kwh || 0, c: '#10B981' },
+          { name: 'Grid Import', v: d.grid_import_kwh || 0, c: '#F43F5E' },
         ];
+        const periodTag = d.days_count > 1 ? `${d.label} (${d.days_count}d)` : d.label;
         bars.forEach((b, bi) => {
-          const bh = (b.v / maxKwh) * ch;
+          const bh = Math.max(1, (b.v / maxKwh) * ch);
           const bx = gx - (bars.length * barW) / 2 + bi * barW;
-          const by = pad.t + ch - bh;
+          const by = pad.t + ch - ((b.v / maxKwh) * ch);
           ctx.fillStyle = b.c;
-          ctx.fillRect(bx, by, barW - 1, bh);
+          ctx.fillRect(bx, by, barW - 1, (b.v / maxKwh) * ch);
+          _dailyBarHitboxes.push({
+            x: bx,
+            y: pad.t,
+            w: barW,
+            h: ch,
+            barTop: by,
+            periodLabel: periodTag,
+            metric: b.name,
+            value: b.v,
+            color: b.c,
+            allBars: bars,
+          });
         });
 
         ctx.fillStyle = '#94A3B8';
         ctx.font = '10px JetBrains Mono, monospace';
         ctx.textAlign = 'center';
-        ctx.fillText(d.date_str.slice(5), gx, H - 8);
+        ctx.fillText(d.shortLabel || d.date_str.slice(5), gx, H - 8);
       }
       ctx.restore();
+
+      if (tooltip && !canvas._barHoverBound) {
+        canvas._barHoverBound = true;
+        canvas.onmousemove = (ev) => {
+          const r = canvas.getBoundingClientRect();
+          const mx = ev.clientX - r.left;
+          const my = ev.clientY - r.top;
+          const hit = _dailyBarHitboxes.find(b => mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h);
+          if (!hit) {
+            tooltip.style.display = 'none';
+            return;
+          }
+          const others = hit.allBars
+            .map(b => `<div style="display:flex; justify-content:space-between; gap:12px; ${b.name === hit.metric ? 'font-weight:700; color:#F8FAFC;' : 'color:#94A3B8;'}"><span><span style="color:${b.c};">●</span> ${b.name}</span><span>${b.v.toFixed(2)} kWh</span></div>`)
+            .join('');
+          tooltip.innerHTML = `<div style="font-weight:700; margin-bottom:4px; color:#E2E8F0;">${hit.periodLabel}</div>${others}`;
+          tooltip.style.display = 'block';
+          const left = Math.min(r.width - 190, Math.max(8, mx + 12));
+          const top = Math.max(8, Math.min(r.height - 95, my - 24));
+          tooltip.style.left = left + 'px';
+          tooltip.style.top = top + 'px';
+        };
+        canvas.onmouseleave = () => {
+          tooltip.style.display = 'none';
+        };
+      }
     }
 
     function renderDailyLedgerTable() {
       const tbody = document.getElementById('daily-ledger-tbody');
-      if (!dailySummaries || dailySummaries.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="14" style="text-align:center;">No daily records available yet.</td></tr>';
+      const rows = aggregateEnergySummaries(dailySummaries, _energyLedgerPeriod);
+      if (!rows || rows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="14" style="text-align:center;">No energy records available yet.</td></tr>';
         return;
       }
-      tbody.innerHTML = dailySummaries.map(d => `
+      tbody.innerHTML = rows.map(d => {
+        const pLabel = d.days_count > 1 ? `${d.label} (${d.days_count}d)` : (d.label || d.date_str);
+        return `
         <tr>
-          <td>${d.date_str}</td>
+          <td>${pLabel}</td>
           <td style="color:#FBBF24;">${(d.pv_kwh||0).toFixed(2)} kWh</td>
           <td>${(d.pv1_kwh||0).toFixed(1)} / ${(d.pv2_kwh||0).toFixed(1)}</td>
           <td style="color:#C084FC;">${(d.consumption_kwh||0).toFixed(2)} kWh</td>
@@ -2621,7 +2993,8 @@
           <td>${d.min_soc_pct||0}% – ${d.max_soc_pct||0}%</td>
           <td>${(d.max_cell_delta_mv||0).toFixed(1)} mV</td>
         </tr>
-      `).join('');
+      `;
+      }).join('');
     }
 
     // =========================================================================
@@ -2810,7 +3183,7 @@
 
       if (sys && sys.hostname) {
         const piRows = [
-          ['App Version', `v${sys.app_version || '1.1.0'}`],
+          ['App Version', `v${sys.app_version || '1.3.0'}`],
           ['Hostname & Hardware', `${sys.hostname} (${sys.hardware_model || 'Raspberry Pi'})`],
           ['Operating System & Python', `${sys.os_release} • Python ${sys.python_version}`],
           ['CPU Temperature', `${sys.cpu_temp_c ?? '—'} °C`],
@@ -2946,6 +3319,116 @@
         }
       } catch (e) {
         showToast('⚠ Network error saving configuration');
+      }
+    }
+
+    async function exportSystemBackup() {
+      const incCfg = document.getElementById('bak-exp-cfg').checked;
+      const incHist = document.getElementById('bak-exp-hist').checked;
+      const statusEl = document.getElementById('bak-status-msg');
+      const btn = document.getElementById('btn-bak-export');
+      if (!incCfg && !incHist) {
+        showToast('⚠ Select configuration and/or historic data to export');
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = 'Preparing backup…';
+      statusEl.style.color = 'var(--text-muted)';
+      statusEl.textContent = 'Flushing telemetry buffers and creating backup archive…';
+      try {
+        const url = `/api/backup/export?include_config=${incCfg}&include_history=${incHist}`;
+        const res = await fetch(url);
+        if (!res.ok) {
+          let errMsg = `HTTP ${res.status}`;
+          try { const j = await res.json(); errMsg = j.error || errMsg; } catch {}
+          throw new Error(errMsg);
+        }
+        const blob = await res.blob();
+        const disp = res.headers.get('Content-Disposition') || '';
+        const m = disp.match(/filename="([^"]+)"/);
+        const filename = m ? m[1] : `givenergy-backup-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.zip`;
+        const a = document.createElement('a');
+        const objUrl = URL.createObjectURL(blob);
+        a.href = objUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(objUrl);
+        const mb = (blob.size / (1024 * 1024)).toFixed(2);
+        statusEl.style.color = '#34D399';
+        statusEl.textContent = `✓ Exported ${filename} (${mb} MB)`;
+        showToast(`✓ Backup downloaded (${mb} MB)`);
+      } catch (e) {
+        statusEl.style.color = '#F87171';
+        statusEl.textContent = `⚠ Export failed: ${e.message || e}`;
+        showToast('⚠ Backup export failed');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '⬇ Download Backup (.zip)';
+      }
+    }
+
+    async function importSystemBackup() {
+      const fileInput = document.getElementById('bak-imp-file');
+      const resCfg = document.getElementById('bak-imp-cfg').checked;
+      const resHist = document.getElementById('bak-imp-hist').checked;
+      const keepTok = document.getElementById('bak-imp-keep-tok').checked;
+      const statusEl = document.getElementById('bak-status-msg');
+      const btn = document.getElementById('btn-bak-import');
+
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) {
+        showToast('⚠ Choose a backup .zip file first');
+        return;
+      }
+      if (!resCfg && !resHist) {
+        showToast('⚠ Select configuration and/or historic data to restore');
+        return;
+      }
+      const targets = [
+        resCfg ? 'configuration (property & tariffs)' : null,
+        resHist ? 'historic telemetry database' : null,
+      ].filter(Boolean).join(' and ');
+      if (!confirm(`Restore ${targets} from "${file.name}"?\n\nThis will overwrite the selected data on this system.`)) {
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = 'Restoring…';
+      statusEl.style.color = 'var(--text-muted)';
+      statusEl.textContent = `Uploading and validating "${file.name}"…`;
+      try {
+        const url = `/api/backup/import?restore_config=${resCfg}&restore_history=${resHist}&preserve_api_token=${keepTok}`;
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/zip' },
+          body: file,
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          throw new Error(data.error || `HTTP ${res.status}`);
+        }
+        const st = data.stats || {};
+        const parts = [];
+        if (data.restored_config) parts.push('property config');
+        if (data.restored_tariff) parts.push('tariff config');
+        if (data.restored_history) parts.push(`historic DB (${st.days_recorded ?? 0} days, ${st.rows_5m ?? 0} 5m rows, ${st.rows_1m ?? 0} 1m rows)`);
+        statusEl.style.color = '#34D399';
+        statusEl.textContent = `✓ Restore complete: ${parts.join(', ')}.`;
+        showToast('✓ System backup restored!');
+        if (typeof loadPropertyConfig === 'function') loadPropertyConfig();
+        if (typeof loadPairingInfo === 'function') loadPairingInfo();
+        if (typeof loadTariffConfigUI === 'function') loadTariffConfigUI();
+        if (typeof loadCostsTab === 'function') loadCostsTab();
+        if (typeof loadHistoryData === 'function') loadHistoryData();
+      } catch (e) {
+        statusEl.style.color = '#F87171';
+        statusEl.textContent = `⚠ Restore failed: ${e.message || e}`;
+        showToast('⚠ Backup restore failed');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '⬆ Restore Backup';
       }
     }
 
@@ -3167,7 +3650,310 @@
               sel.appendChild(opt);
             }
           }
+          renderComparisonPresetList();
+          const cmpExp = document.getElementById('cmp-export-preset');
+          if (cmpExp) {
+            cmpExp.innerHTML = '<option value="">Use My Current Export Tariff</option>';
+            for (const p of (_tariffPresetsCache.presets?.export || [])) {
+              const opt = document.createElement('option');
+              opt.value = p.id;
+              opt.textContent = `${p.supplier} — ${p.name}`;
+              cmpExp.appendChild(opt);
+            }
+          }
         }
+      }
+    }
+
+    let _savedComparisonTariffs = [];
+    let _hiddenComparisonPresets = [];
+
+    function _escHtml(s) {
+      return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function renderComparisonPresetList(checkedIds = null) {
+      const cmpList = document.getElementById('cmp-preset-list');
+      if (!cmpList) return;
+      if (checkedIds === null) {
+        const existing = cmpList.querySelectorAll('.cmp-imp-chk');
+        if (existing.length > 0) {
+          checkedIds = new Set(Array.from(existing).filter(c => c.checked).map(c => c.value));
+        } else {
+          checkedIds = new Set(['ofgem_svt']);
+        }
+      }
+      const hidden = new Set(_hiddenComparisonPresets || []);
+      const resetBtn = document.getElementById('btn-cmp-reset-presets');
+      if (resetBtn) resetBtn.style.display = hidden.size > 0 ? '' : 'none';
+
+      const impPresets = (_tariffPresetsCache?.presets?.import || []).filter(p => !hidden.has(p.id));
+      const rows = [];
+      for (const p of impPresets) {
+        const label = `${p.supplier} — ${p.name}`;
+        const safeLabel = _escHtml(label);
+        const safeId = _escHtml(p.id);
+        const chk = checkedIds.has(p.id) ? 'checked' : '';
+        rows.push(`
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:6px;">
+            <label style="display:flex; align-items:center; gap:6px; cursor:pointer; flex:1; min-width:0;">
+              <input type="checkbox" class="cmp-imp-chk" value="${safeId}" data-kind="preset" data-label="${safeLabel}" ${chk} />
+              <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${safeLabel}">${safeLabel}</span>
+            </label>
+            <button class="btn" style="padding:1px 6px; font-size:10.5px; color:#F87171; border-color:rgba(248,113,113,0.3);" title="Remove from list" onclick="deleteComparisonTariff('${safeId}')">✕</button>
+          </div>
+        `);
+      }
+      for (const ct of (_savedComparisonTariffs || [])) {
+        const winCount = (ct.windows || []).length;
+        const rateTxt = winCount > 0 ? `${ct.default_rate_p}p + ${winCount} off-peak` : `${ct.default_rate_p}p`;
+        const safeLabel = _escHtml(ct.name || 'Custom');
+        const safeDisplay = _escHtml(`${ct.name} (${rateTxt})`);
+        const safeId = _escHtml(ct.id);
+        const chk = checkedIds.has(ct.id) ? 'checked' : '';
+        rows.push(`
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:6px;">
+            <label style="display:flex; align-items:center; gap:6px; cursor:pointer; flex:1; min-width:0;">
+              <input type="checkbox" class="cmp-imp-chk" value="${safeId}" data-kind="custom" data-label="${safeLabel}" ${chk} />
+              <span style="color:#93C5FD; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${safeLabel}">★ ${safeDisplay}</span>
+            </label>
+            <button class="btn" style="padding:1px 6px; font-size:10.5px; color:#F87171; border-color:rgba(248,113,113,0.3);" title="Delete saved tariff" onclick="deleteComparisonTariff('${safeId}')">✕</button>
+          </div>
+        `);
+      }
+      cmpList.innerHTML = rows.length ? rows.join('') : '<span style="color:var(--text-muted);">No tariffs in list. Add a custom quote or restore built-in presets.</span>';
+    }
+
+    function addCustomCmpWindow(w = { start: '00:00', end: '07:00', rate_p: 7.0, label: 'Off-Peak' }) {
+      const list = document.getElementById('cmp-custom-windows-list');
+      if (!list) return;
+      const row = document.createElement('div');
+      row.className = 'cmp-win-row';
+      row.style.cssText = 'display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,0.8fr) minmax(0,1fr) auto; gap:5px; align-items:center; width:100%; box-sizing:border-box;';
+      row.innerHTML = `
+        <input type="time" class="cmp-win-start" value="${w.start || '00:00'}" style="width:100%; min-width:0; box-sizing:border-box; font-size:11.5px; background:#090D16; color:var(--text-main); border:1px solid var(--border-bright); border-radius:6px; padding:4px;" />
+        <input type="time" class="cmp-win-end" value="${w.end || '07:00'}" style="width:100%; min-width:0; box-sizing:border-box; font-size:11.5px; background:#090D16; color:var(--text-main); border:1px solid var(--border-bright); border-radius:6px; padding:4px;" />
+        <input type="number" step="0.01" class="cmp-win-rate" value="${w.rate_p ?? 7.0}" placeholder="p/kWh" style="width:100%; min-width:0; box-sizing:border-box; font-size:11.5px;" />
+        <input type="text" class="cmp-win-lbl" value="${(w.label || 'Off-Peak').replace(/"/g, '&quot;')}" placeholder="Label" style="width:100%; min-width:0; box-sizing:border-box; font-size:11.5px; background:#090D16; color:var(--text-main); border:1px solid var(--border-bright); border-radius:6px; padding:4px 6px;" />
+        <button class="btn" style="padding:3px 7px; font-size:11px; color:#F87171;" onclick="this.parentElement.remove()">✕</button>
+      `;
+      list.appendChild(row);
+    }
+
+    function getCustomCmpWindows() {
+      const wins = [];
+      document.querySelectorAll('#cmp-custom-windows-list .cmp-win-row').forEach(row => {
+        const start = row.querySelector('.cmp-win-start')?.value || '00:00';
+        const end = row.querySelector('.cmp-win-end')?.value || '07:00';
+        const rate = parseFloat(row.querySelector('.cmp-win-rate')?.value || '0');
+        const label = row.querySelector('.cmp-win-lbl')?.value.trim() || 'Off-Peak';
+        if (!Number.isNaN(rate)) {
+          wins.push({ start, end, rate_p: rate, label });
+        }
+      });
+      return wins;
+    }
+
+    async function saveCustomComparisonTariff() {
+      const name = document.getElementById('cmp-custom-name')?.value.trim() || '';
+      const impStr = document.getElementById('cmp-custom-imp')?.value;
+      const expStr = document.getElementById('cmp-custom-exp')?.value;
+      const scStr = document.getElementById('cmp-custom-sc')?.value;
+      if (!name) {
+        showToast('⚠ Enter a tariff name before saving');
+        return;
+      }
+      if (impStr === '' || impStr === undefined || Number.isNaN(parseFloat(impStr))) {
+        showToast('⚠ Enter a Day / Default import rate (p/kWh)');
+        return;
+      }
+      const payload = {
+        name,
+        default_rate_p: parseFloat(impStr),
+        export_rate_p: (expStr !== '' && expStr !== undefined) ? parseFloat(expStr) : null,
+        standing_charge_p: (scStr !== '' && scStr !== undefined) ? parseFloat(scStr) : null,
+        windows: getCustomCmpWindows(),
+      };
+      try {
+        const res = await fetch('/api/tariffs/compare/saved', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        _savedComparisonTariffs = data.comparison_tariffs || [];
+        _hiddenComparisonPresets = data.hidden_comparison_presets || [];
+        const checked = new Set(Array.from(document.querySelectorAll('.cmp-imp-chk:checked')).map(c => c.value));
+        if (data.item?.id) checked.add(data.item.id);
+        renderComparisonPresetList(checked);
+        document.getElementById('cmp-custom-name').value = '';
+        document.getElementById('cmp-custom-imp').value = '';
+        document.getElementById('cmp-custom-exp').value = '';
+        document.getElementById('cmp-custom-sc').value = '';
+        document.getElementById('cmp-custom-windows-list').innerHTML = '';
+        showToast(`✓ Saved "${name}" to comparison list`);
+      } catch (e) {
+        showToast(`⚠ Failed to save tariff: ${e.message || e}`);
+      }
+    }
+
+    async function deleteComparisonTariff(id) {
+      try {
+        const res = await fetch(`/api/tariffs/compare/saved/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        _savedComparisonTariffs = data.comparison_tariffs || [];
+        _hiddenComparisonPresets = data.hidden_comparison_presets || [];
+        const checked = new Set(Array.from(document.querySelectorAll('.cmp-imp-chk:checked')).map(c => c.value));
+        checked.delete(id);
+        renderComparisonPresetList(checked);
+        showToast('✓ Removed tariff from comparison list');
+      } catch (e) {
+        showToast('⚠ Failed to remove tariff');
+      }
+    }
+
+    async function resetComparisonPresets() {
+      try {
+        const res = await fetch('/api/tariffs/compare/reset-presets', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        _hiddenComparisonPresets = [];
+        renderComparisonPresetList();
+        showToast('✓ Built-in UK presets restored');
+      } catch (e) {
+        showToast('⚠ Failed to restore presets');
+      }
+    }
+
+    async function runTariffComparison(compareAll = false) {
+      const tbody = document.getElementById('cmp-results-tbody');
+      const days = parseInt(document.getElementById('cmp-days-select').value, 10);
+      const expPreset = document.getElementById('cmp-export-preset')?.value || '';
+      const customName = document.getElementById('cmp-custom-name')?.value.trim() || '';
+      const customImpVal = document.getElementById('cmp-custom-imp')?.value;
+      const customExpVal = document.getElementById('cmp-custom-exp')?.value;
+      const customScVal = document.getElementById('cmp-custom-sc')?.value;
+      const customWins = getCustomCmpWindows();
+
+      let candidates = [];
+      if (!compareAll) {
+        const savedById = new Map((_savedComparisonTariffs || []).map(t => [t.id, t]));
+        document.querySelectorAll('.cmp-imp-chk:checked').forEach(chk => {
+          if (chk.dataset.kind === 'custom') {
+            const ct = savedById.get(chk.value);
+            if (ct) {
+              candidates.push({
+                name: ct.name,
+                custom_import_rate_p: ct.default_rate_p,
+                custom_export_rate_p: ct.export_rate_p ?? null,
+                export_preset_id: (ct.export_rate_p == null && expPreset) ? expPreset : null,
+                standing_charge_p: ct.standing_charge_p ?? null,
+                custom_import_windows: ct.windows || [],
+              });
+            }
+          } else {
+            candidates.push({
+              name: chk.dataset.label || chk.value,
+              import_preset_id: chk.value,
+              export_preset_id: expPreset || null,
+            });
+          }
+        });
+        if (customImpVal !== '' && customImpVal !== undefined) {
+          candidates.push({
+            name: customName || `Custom (${customImpVal}p${customWins.length ? ' + Off-Peak' : ''})`,
+            custom_import_rate_p: parseFloat(customImpVal),
+            custom_export_rate_p: (customExpVal !== '' && customExpVal !== undefined) ? parseFloat(customExpVal) : null,
+            export_preset_id: (customExpVal === '' && expPreset) ? expPreset : null,
+            standing_charge_p: (customScVal !== '' && customScVal !== undefined) ? parseFloat(customScVal) : null,
+            custom_import_windows: customWins,
+          });
+        }
+        if (candidates.length === 0) {
+          showToast('⚠ Select at least one tariff or enter a custom rate');
+          return;
+        }
+      } else if (expPreset) {
+        await ensureTariffMetadataLoaded();
+        const hidden = new Set(_hiddenComparisonPresets || []);
+        for (const p of (_tariffPresetsCache?.presets?.import || []).filter(x => !hidden.has(x.id))) {
+          candidates.push({
+            name: `${p.supplier} — ${p.name}`,
+            import_preset_id: p.id,
+            export_preset_id: expPreset,
+          });
+        }
+        for (const ct of (_savedComparisonTariffs || [])) {
+          candidates.push({
+            name: ct.name,
+            custom_import_rate_p: ct.default_rate_p,
+            custom_export_rate_p: ct.export_rate_p ?? null,
+            export_preset_id: (ct.export_rate_p == null) ? expPreset : null,
+            standing_charge_p: ct.standing_charge_p ?? null,
+            custom_import_windows: ct.windows || [],
+          });
+        }
+      }
+
+      tbody.innerHTML = '<tr><td colspan="9" style="text-align:center; color:var(--text-muted);">Calculating comparison across historic telemetry…</td></tr>';
+      try {
+        const res = await fetch('/api/tariffs/compare', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ days: Number.isNaN(days) ? 30 : days, candidates }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          throw new Error(data.error || `HTTP ${res.status}`);
+        }
+        const curSym = data.currency_symbol || '£';
+        const cur = data.current || {};
+        const fmt = (v) => `${curSym}${Number(v || 0).toFixed(2)}`;
+        const fmtDiff = (v, suffix = '') => {
+          const n = Number(v || 0);
+          if (Math.abs(n) < 0.005) return `<span style="color:var(--text-muted);">${curSym}0.00${suffix}</span>`;
+          const color = n < 0 ? '#34D399' : '#F87171';
+          const sign = n < 0 ? '-' : '+';
+          const label = n < 0 ? 'cheaper' : 'more';
+          return `<span style="color:${color}; font-weight:600;">${sign}${curSym}${Math.abs(n).toFixed(2)}${suffix}</span> <span style="font-size:10.5px; color:var(--text-muted);">(${label})</span>`;
+        };
+
+        const rows = [];
+        rows.push(`
+          <tr style="background:rgba(59,130,246,0.12); border-left:3px solid #60A5FA;">
+            <td><b>★ Current:</b> ${_escHtml(cur.name || 'Active Tariff')} <span style="font-size:11px; color:#93C5FD;">(${data.days_count}d)</span></td>
+            <td style="font-family:var(--font-mono); font-size:11.5px;">${_escHtml(cur.import_rate_summary)} / ${_escHtml(cur.export_rate_summary)} / ${Number(cur.standing_charge_p || 0).toFixed(1)}p</td>
+            <td style="color:#F87171;">${fmt(cur.import_cost_gbp)}</td>
+            <td style="color:#34D399;">${fmt(cur.export_income_gbp)}</td>
+            <td>${fmt(cur.standing_charge_gbp)}</td>
+            <td><b>${fmt(cur.net_cost_gbp)}</b></td>
+            <td>${fmt(cur.avg_daily_net_gbp)}</td>
+            <td><span style="color:#93C5FD; font-weight:600;">Baseline</span></td>
+            <td>—</td>
+          </tr>
+        `);
+
+        for (const r of (data.comparisons || [])) {
+          rows.push(`
+            <tr>
+              <td>${_escHtml(r.name)}</td>
+              <td style="font-family:var(--font-mono); font-size:11.5px;">${_escHtml(r.import_rate_summary)} / ${_escHtml(r.export_rate_summary)} / ${Number(r.standing_charge_p || 0).toFixed(1)}p</td>
+              <td style="color:#F87171;">${fmt(r.import_cost_gbp)}</td>
+              <td style="color:#34D399;">${fmt(r.export_income_gbp)}</td>
+              <td>${fmt(r.standing_charge_gbp)}</td>
+              <td><b>${fmt(r.net_cost_gbp)}</b></td>
+              <td>${fmt(r.avg_daily_net_gbp)}</td>
+              <td>${fmtDiff(r.diff_vs_current_gbp)}</td>
+              <td>${fmtDiff(r.annual_est_diff_gbp, '/yr')}</td>
+            </tr>
+          `);
+        }
+        tbody.innerHTML = rows.join('');
+      } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; color:#F87171;">⚠ Comparison failed: ${e.message || e}</td></tr>`;
+        showToast('⚠ Tariff comparison failed');
       }
     }
 
@@ -3290,6 +4076,9 @@
       const res = await fetch('/api/tariffs/config');
       if (!res.ok) return;
       const cfg = await res.json();
+      _savedComparisonTariffs = Array.isArray(cfg.comparison_tariffs) ? cfg.comparison_tariffs : [];
+      _hiddenComparisonPresets = Array.isArray(cfg.hidden_comparison_presets) ? cfg.hidden_comparison_presets : [];
+      renderComparisonPresetList();
       document.getElementById('tariff-region').value = cfg.region || 'H';
       document.getElementById('tariff-postcode').value = cfg.postcode || '';
       document.getElementById('tariff-standing-p').value = Number(cfg.standing_charge_p ?? 60.0).toFixed(2);

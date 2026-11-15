@@ -241,6 +241,8 @@ class TariffConfig:
     price_cap_auto_sync: bool = True
     price_cap_source: str = "Ofgem Price Cap (Default)"
     price_cap_updated_at: str = ""
+    comparison_tariffs: list[dict[str, Any]] = field(default_factory=list)
+    hidden_comparison_presets: list[str] = field(default_factory=list)
 
 
 def _side_from_dict(raw: dict[str, Any] | None, fallback: TariffSideConfig) -> TariffSideConfig:
@@ -294,6 +296,8 @@ def load_tariff_config(path: Path) -> TariffConfig:
             price_cap_auto_sync=bool(raw.get("price_cap_auto_sync", cfg.price_cap_auto_sync)),
             price_cap_source=str(raw.get("price_cap_source", cfg.price_cap_source)),
             price_cap_updated_at=str(raw.get("price_cap_updated_at", "")),
+            comparison_tariffs=[t for t in (raw.get("comparison_tariffs") or []) if isinstance(t, dict)],
+            hidden_comparison_presets=[str(x) for x in (raw.get("hidden_comparison_presets") or [])],
         )
     except Exception:
         return cfg

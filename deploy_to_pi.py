@@ -19,16 +19,16 @@ REMOTE_ROOT = "/opt/givenergy-web"
 LOCAL_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 
 FILES_TO_DEPLOY = [
-    ("givenergy_app/__init__.py", "givenergy_app/__init__.py"),
-    ("givenergy_app/models.py", "givenergy_app/models.py"),
     ("givenergy_web/__init__.py", "givenergy_web/__init__.py"),
     ("givenergy_web/config.py", "givenergy_web/config.py"),
     ("givenergy_web/database.py", "givenergy_web/database.py"),
+    ("givenergy_web/models.py", "givenergy_web/models.py"),
     ("givenergy_web/poller.py", "givenergy_web/poller.py"),
     ("givenergy_web/server.py", "givenergy_web/server.py"),
     ("givenergy_web/tariffs.py", "givenergy_web/tariffs.py"),
     ("givenergy_web/static/index.html", "givenergy_web/static/index.html"),
     ("givenergy_web/static/manifest.json", "givenergy_web/static/manifest.json"),
+    ("givenergy_web/static/icon.ico", "givenergy_web/static/icon.ico"),
     ("givenergy_web/static/icon-192.png", "givenergy_web/static/icon-192.png"),
     ("givenergy_web/static/icon-512.png", "givenergy_web/static/icon-512.png"),
 ]

@@ -8,6 +8,7 @@ import logging
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, time as dt_time
+from pathlib import Path
 from typing import Any, Callable
 
 from givenergy_modbus.client import commands
@@ -19,7 +20,7 @@ from givenergy_modbus.model.plant import PlantCapabilities
 from pymodbus.client import ModbusTcpClient
 
 from givenergy_web.models import BatteryTelemetry, PlantSnapshot
-from givenergy_web.config import PropertyConfig
+from givenergy_web.config import PropertyConfig, save_config
 from givenergy_web.database import HistoricDatabase
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,7 @@ EVC_STATUS_LIST = [
 
 EVC_CABLE_STATUS = ["Not Connected", "Connected"]
 EVC_CHARGE_CONTROL = ["Ready", "Start", "Stop"]
+EVC_CHARGING_MODES = ["Solar", "Hybrid", "Grid"]
 
 EVC_ERROR_CODES = {
     0: "Clear",
@@ -103,6 +105,8 @@ def serialize_snapshot(snap: PlantSnapshot, cfg: PropertyConfig | None = None) -
     evc_dict["last_updated"] = evc.last_updated.strftime("%Y-%m-%d %H:%M:%S") if evc.last_updated else None
     evc_dict["system_time"] = evc.system_time.strftime("%Y-%m-%d %H:%M:%S") if evc.system_time else None
     evc_dict["session_duration_formatted"] = evc.session_duration_formatted
+    evc_dict["cable_status"] = evc.connection_status
+    evc_dict["error_text"] = evc.error_description
 
     has_solar_mode = cfg.has_solar_pv if cfg else "auto"
     if has_solar_mode == "yes":
@@ -144,9 +148,11 @@ class AsyncPlantPoller:
         db: HistoricDatabase,
         config: PropertyConfig | None = None,
         broadcast_cb: Callable[[dict[str, Any]], Any] | None = None,
+        config_path: Path | None = None,
     ) -> None:
         self.db = db
         self.config = config or PropertyConfig()
+        self.config_path = config_path
         self.inverter_enabled = self.config.inverter_enabled
         self.inverter_ip = self.config.inverter_ip
         self.inverter_port = self.config.inverter_port
@@ -157,12 +163,41 @@ class AsyncPlantPoller:
         self.broadcast_cb = broadcast_cb
 
         self.snapshot = PlantSnapshot()
+        self._last_evc_solar_adjust_ts = 0.0
+        self._evc_low_solar_since: float | None = None
+        self._evc_solar_started: bool = False
+        self._evc_was_scheduled: bool = False
+        self._evc_scheduled_session: bool = False
+        self._saved_inv_discharge_limit: int | None = None
+        self._sync_evc_config_to_snapshot()
         self.events: list[dict[str, str]] = []
         self._running = False
         self._task: asyncio.Task | None = None
         self._wakeup_event = asyncio.Event()
         self._cmd_queue: asyncio.Queue[WebControlCommand] = asyncio.Queue()
         self.started_at = time.time()
+
+    @staticmethod
+    def _normalize_evc_mode(mode: str | None) -> str:
+        raw = str(mode or "Grid").strip().lower()
+        if raw in ("solar", "supereco", "eco+"):
+            return "Solar"
+        if raw in ("hybrid", "eco"):
+            return "Hybrid"
+        return "Grid"
+
+    def _save_config_safe(self) -> None:
+        if self.config_path is not None:
+            try:
+                save_config(self.config_path, self.config)
+            except Exception as exc:
+                logger.warning("Failed to persist property config: %s", exc)
+
+    def _sync_evc_config_to_snapshot(self) -> None:
+        t_evc = self.snapshot.ev_charger
+        t_evc.charging_mode = self._normalize_evc_mode(self.config.evc_charging_mode)
+        t_evc.max_battery_discharge_w = max(0, min(5000, int(self.config.evc_max_battery_discharge_w)))
+        t_evc.solar_export_split_pct = max(0, min(100, int(self.config.evc_solar_export_split_pct)))
 
     async def apply_config(self, cfg: PropertyConfig) -> None:
         self.config = cfg
@@ -173,6 +208,7 @@ class AsyncPlantPoller:
         self.evc_ip = cfg.evc_ip
         self.evc_port = cfg.evc_port
         self.poll_interval_s = max(2.0, float(cfg.poll_interval_s))
+        self._sync_evc_config_to_snapshot()
         if not self.inverter_enabled:
             self.snapshot.inverter.connected = False
             self.snapshot.battery.present = False
@@ -279,6 +315,9 @@ class AsyncPlantPoller:
                 )
             else:
                 self.snapshot.inverter.connected = False
+
+            # 3b. Apply EV Charger Solar/Hybrid & Battery Discharge controls
+            await self._apply_evc_smart_controls(inv_client, inv_detected)
 
             # 4. Record in SD-safe database & broadcast to WebSockets
             self.db.record_snapshot(copy.deepcopy(self.snapshot))
@@ -640,6 +679,8 @@ class AsyncPlantPoller:
             except ValueError:
                 pass
 
+            self._sync_evc_config_to_snapshot()
+
             t_evc.connected = True
             t_evc.last_updated = datetime.now()
             t_evc.error_message = ""
@@ -700,23 +741,262 @@ class AsyncPlantPoller:
             self.log_event("error", f"Inverter command failed ({cmd.description}): {exc}")
             return False
 
+    def _write_evc_registers(self, addr: int, values: list[int]) -> bool:
+        if not self.evc_ip:
+            return False
+        client = ModbusTcpClient(self.evc_ip, port=self.evc_port, timeout=2.5)
+        try:
+            if not client.connect():
+                return False
+            res = client.write_registers(addr, values, device_id=1)
+            return not (hasattr(res, "isError") and res.isError())
+        except Exception:
+            return False
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
+
+    def _write_evc_current_limit(self, amps: int) -> bool:
+        clamped = max(6, min(32, int(amps)))
+        ok = self._write_evc_registers(91, [clamped * 10])
+        if ok:
+            self.snapshot.ev_charger.setpoint_limit_a = float(clamped)
+        return ok
+
+    def _write_evc_charge_control(self, mode: str) -> bool:
+        val = EVC_CHARGE_CONTROL.index(mode)
+        ok = self._write_evc_registers(95, [val])
+        if ok:
+            self.snapshot.ev_charger.charge_control_state = mode
+        return ok
+
+    async def _apply_evc_smart_controls(
+        self, inv_client: GivInverterClient | None, inv_detected: bool
+    ) -> None:
+        evc = self.snapshot.ev_charger
+        inv = self.snapshot.inverter
+
+        if not evc.cable_connected or self.config.evc_charging_mode != "Solar":
+            self._evc_low_solar_since = None
+            self._evc_solar_started = False
+
+        is_active = (
+            evc.charging_state in ("Charging", "Starting")
+            or evc.charge_control_state == "Start"
+            or evc.active_power_w > 150
+        )
+        if not is_active:
+            self._evc_solar_started = False
+
+        if evc.charging_state == "Scheduled":
+            self._evc_was_scheduled = True
+            self._evc_scheduled_session = False
+        elif is_active and self._evc_was_scheduled:
+            self._evc_scheduled_session = True
+            self._evc_was_scheduled = False
+        elif not is_active:
+            self._evc_was_scheduled = False
+            self._evc_scheduled_session = False
+
+        # Scheduled (or externally started in Solar mode) sessions must run at full power unimpeded
+        scheduled_or_external = (
+            evc.charging_state == "Scheduled"
+            or self._evc_scheduled_session
+            or (self.config.evc_charging_mode == "Solar" and is_active and not self._evc_solar_started)
+        )
+
+        # 1. Dynamic Solar / Hybrid current limit adjustment (or full-power restore for scheduled sessions)
+        now_ts = time.time()
+        user_max_a = max(6, min(32, int(self.config.evc_user_charge_limit_a)))
+        if (
+            self.evc_enabled
+            and evc.connected
+            and evc.cable_connected
+            and self.config.evc_charging_mode in ("Solar", "Hybrid")
+            and scheduled_or_external
+            and (now_ts - self._last_evc_solar_adjust_ts >= 15.0)
+        ):
+            self._last_evc_solar_adjust_ts = now_ts
+            if abs(user_max_a - evc.setpoint_limit_a) >= 1:
+                ok = await asyncio.to_thread(self._write_evc_current_limit, user_max_a)
+                if ok:
+                    self.log_event(
+                        "info",
+                        f"EV Charger (Scheduled): Restored full charge limit to {user_max_a}A",
+                    )
+        elif (
+            self.evc_enabled
+            and evc.connected
+            and inv.connected
+            and evc.cable_connected
+            and self.config.evc_charging_mode in ("Solar", "Hybrid")
+            and not scheduled_or_external
+            and (now_ts - self._last_evc_solar_adjust_ts >= 15.0)
+        ):
+            self._last_evc_solar_adjust_ts = now_ts
+            non_ev_load_w = max(0, inv.p_load_demand - evc.active_power_w)
+            excess_solar_w = max(0, inv.p_pv_total - non_ev_load_w)
+            split_pct = max(0, min(100, int(self.config.evc_solar_export_split_pct)))
+            ev_share = (100 - split_pct) / 100.0
+            allocated_solar_w = excess_solar_w * ev_share
+            v_ac = inv.v_ac1 if inv.v_ac1 > 100 else (evc.voltage_l1_v if evc.voltage_l1_v > 100 else 230.0)
+            solar_amps = allocated_solar_w / v_ac
+
+            target_amps: int | None = None
+            if self.config.evc_charging_mode == "Solar":
+                if solar_amps >= 6:
+                    self._evc_low_solar_since = None
+                    target_amps = min(user_max_a, max(6, int(solar_amps)))
+                else:
+                    if is_active and self._evc_solar_started:
+                        if self._evc_low_solar_since is None:
+                            self._evc_low_solar_since = now_ts
+                        elif now_ts - self._evc_low_solar_since >= 45.0:
+                            ok = await asyncio.to_thread(self._write_evc_charge_control, "Stop")
+                            if ok:
+                                self._evc_low_solar_since = None
+                                self._evc_solar_started = False
+                                self.log_event(
+                                    "info",
+                                    f"EV Charger (Solar): Stopped charging — excess solar ({int(allocated_solar_w)}W) below 6A minimum",
+                                )
+            elif self.config.evc_charging_mode == "Hybrid":
+                target_amps = min(user_max_a, max(6, 6 + int(solar_amps)))
+
+            if target_amps is not None and abs(target_amps - evc.setpoint_limit_a) >= 1:
+                ok = await asyncio.to_thread(self._write_evc_current_limit, target_amps)
+                if ok:
+                    self.log_event(
+                        "info",
+                        f"EV Charger ({self.config.evc_charging_mode}): Adjusted charge limit to {target_amps}A "
+                        f"(excess solar {int(excess_solar_w)}W, export split {split_pct}%)",
+                    )
+
+            if (
+                self.config.evc_charging_mode == "Solar"
+                and solar_amps >= 6
+                and evc.charging_state not in ("Charging", "Starting", "Scheduled")
+                and evc.charge_control_state != "Start"
+                and evc.error_code == 0
+            ):
+                ok = await asyncio.to_thread(self._write_evc_charge_control, "Start")
+                if ok:
+                    self._evc_solar_started = True
+                    self.log_event(
+                        "info",
+                        f"EV Charger (Solar): Auto-started charging ({int(allocated_solar_w)}W excess solar available)",
+                    )
+
+        # 2. Max Battery Discharge Power to EV
+        if inv_client is not None and inv_detected and inv.connected:
+            ev_active = self.evc_enabled and (evc.charging_state == "Charging" or evc.active_power_w > 150)
+            if ev_active:
+                max_w = max(0, min(5000, int(self.config.evc_max_battery_discharge_w)))
+                target_pct = (
+                    0
+                    if max_w <= 0
+                    else min(50, max(1, round(max_w * 50 / max(1, inv.battery_max_power))))
+                )
+                if inv.battery_discharge_limit != target_pct:
+                    if self._saved_inv_discharge_limit is None:
+                        self._saved_inv_discharge_limit = inv.battery_discharge_limit
+                    try:
+                        reqs = commands.set_battery_discharge_limit(target_pct)
+                        await inv_client.one_shot_command(reqs, timeout=2.5, retries=2)
+                        inv.battery_discharge_limit = target_pct
+                        self.log_event(
+                            "info",
+                            f"EV Charger: Capped inverter battery discharge limit to {target_pct}% (~{max_w}W) during EV charge",
+                        )
+                    except Exception as exc:
+                        self.log_event("warning", f"Failed to apply EV battery discharge limit: {exc}")
+            elif self._saved_inv_discharge_limit is not None:
+                restore_pct = self._saved_inv_discharge_limit
+                try:
+                    reqs = commands.set_battery_discharge_limit(restore_pct)
+                    await inv_client.one_shot_command(reqs, timeout=2.5, retries=2)
+                    inv.battery_discharge_limit = restore_pct
+                    self._saved_inv_discharge_limit = None
+                    self.log_event(
+                        "info",
+                        f"EV Charger: Restored inverter battery discharge limit to {restore_pct}%",
+                    )
+                except Exception as exc:
+                    self.log_event("warning", f"Failed to restore inverter battery discharge limit: {exc}")
+
     def _execute_evc_command(self, cmd: WebControlCommand) -> bool:
+        p = cmd.params
+        if cmd.action == "set_charging_mode":
+            prev_mode = self._normalize_evc_mode(self.config.evc_charging_mode)
+            mode = self._normalize_evc_mode(p.get("mode"))
+            self.config.evc_charging_mode = mode
+            self.snapshot.ev_charger.charging_mode = mode
+            self._last_evc_solar_adjust_ts = 0.0
+            self._evc_low_solar_since = None
+            self._evc_solar_started = False
+            self._save_config_safe()
+            if mode == "Grid" and self.evc_enabled and self.evc_ip:
+                evc = self.snapshot.ev_charger
+                is_active = (
+                    evc.charging_state == "Charging"
+                    or evc.charge_control_state == "Start"
+                    or evc.active_power_w > 150
+                )
+                if prev_mode in ("Solar", "Hybrid") and is_active:
+                    if self._write_evc_charge_control("Stop"):
+                        self.log_event(
+                            "info",
+                            f"EV Charger: Stopped active {prev_mode} charge session on switch to Grid mode",
+                        )
+                amps = max(6, min(32, int(self.config.evc_user_charge_limit_a)))
+                self._write_evc_current_limit(amps)
+            self.log_event("success", f"EV Charger: {cmd.description}")
+            return True
+
+        if cmd.action == "set_max_battery_discharge":
+            power_w = max(0, min(5000, int(p.get("power_w", 0))))
+            self.config.evc_max_battery_discharge_w = power_w
+            self.snapshot.ev_charger.max_battery_discharge_w = power_w
+            self._save_config_safe()
+            self.log_event("success", f"EV Charger: {cmd.description}")
+            return True
+
+        if cmd.action == "set_solar_export_split":
+            split_pct = max(0, min(100, int(p.get("split_pct", 0))))
+            self.config.evc_solar_export_split_pct = split_pct
+            self.snapshot.ev_charger.solar_export_split_pct = split_pct
+            self._last_evc_solar_adjust_ts = 0.0
+            self._save_config_safe()
+            self.log_event("success", f"EV Charger: {cmd.description}")
+            return True
+
         client = ModbusTcpClient(self.evc_ip, port=self.evc_port, timeout=3.0)
         try:
             if not client.connect():
                 self.log_event("error", f"EV Charger offline ({self.evc_ip}:{self.evc_port})")
                 return False
 
-            p = cmd.params
             if cmd.action == "charge_control":
-                val = EVC_CHARGE_CONTROL.index(str(p["mode"]))
+                raw_mode = str(p.get("mode") or p.get("action") or "Ready").strip().capitalize()
+                val = EVC_CHARGE_CONTROL.index(raw_mode)
                 res = client.write_registers(95, [val], device_id=1)
+                if not (hasattr(res, "isError") and res.isError()):
+                    self._evc_solar_started = False
+                    self._evc_low_solar_since = None
             elif cmd.action == "plug_and_go":
-                val = 0 if p["enabled"] else 1
+                val = 0 if p.get("enabled") else 1
                 res = client.write_registers(93, [val], device_id=1)
+                if not (hasattr(res, "isError") and res.isError()):
+                    self.snapshot.ev_charger.plug_and_go_enabled = bool(p.get("enabled"))
             elif cmd.action == "current_limit":
                 amps = max(6, min(32, int(p["amps"])))
                 res = client.write_registers(91, [amps * 10], device_id=1)
+                if not (hasattr(res, "isError") and res.isError()):
+                    self.config.evc_user_charge_limit_a = amps
+                    self.snapshot.ev_charger.setpoint_limit_a = float(amps)
+                    self._save_config_safe()
             elif cmd.action == "sync_time":
                 now = datetime.now()
                 res = client.write_registers(

@@ -23,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CurrencyPound
 import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.EvStation
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -140,13 +141,19 @@ class MainActivity : ComponentActivity() {
                             selected = selectedTab == 0,
                             onClick = { selectedTab = 0 },
                             icon = { Icon(Icons.Default.Bolt, contentDescription = "Live") },
-                            label = { Text("Live") },
+                            label = { Text("Live", maxLines = 1, softWrap = false) },
                         )
                         NavigationBarItem(
                             selected = selectedTab == 1,
                             onClick = { selectedTab = 1 },
-                            icon = { Icon(Icons.Default.Tune, contentDescription = "Controls") },
-                            label = { Text("Controls") },
+                            icon = { Icon(Icons.Default.Tune, contentDescription = "Inverter") },
+                            label = { Text("Inverter", maxLines = 1, softWrap = false) },
+                        )
+                        NavigationBarItem(
+                            selected = selectedTab == 5,
+                            onClick = { selectedTab = 5 },
+                            icon = { Icon(Icons.Default.EvStation, contentDescription = "EV") },
+                            label = { Text("EV", maxLines = 1, softWrap = false) },
                         )
                         NavigationBarItem(
                             selected = selectedTab == 2,
@@ -155,7 +162,7 @@ class MainActivity : ComponentActivity() {
                                 loadHistoryAsync(uiState.historyRangeDays)
                             },
                             icon = { Icon(Icons.Default.DateRange, contentDescription = "History") },
-                            label = { Text("History") },
+                            label = { Text("History", maxLines = 1, softWrap = false) },
                         )
                         NavigationBarItem(
                             selected = selectedTab == 4,
@@ -164,13 +171,13 @@ class MainActivity : ComponentActivity() {
                                 loadCostsAsync()
                             },
                             icon = { Icon(Icons.Default.CurrencyPound, contentDescription = "Costs") },
-                            label = { Text("Costs") },
+                            label = { Text("Costs", maxLines = 1, softWrap = false) },
                         )
                         NavigationBarItem(
                             selected = selectedTab == 3,
                             onClick = { selectedTab = 3 },
                             icon = { Icon(Icons.Default.Memory, contentDescription = "System") },
-                            label = { Text("System") },
+                            label = { Text("System", maxLines = 1, softWrap = false) },
                         )
                     }
                 },
@@ -180,9 +187,8 @@ class MainActivity : ComponentActivity() {
                         .fillMaxSize()
                         .padding(innerPadding)
                 ) {
-                    when (selectedTab) {
-                        0 -> LiveScreen(uiState)
-                        1 -> ControlsScreen(uiState) { target, action, params, desc ->
+                    val sendControlAction: (String, String, Map<String, Any>, String) -> Unit =
+                        { target, action, params, desc ->
                             thread {
                                 val ok = try {
                                     apiClient.sendControl(target, action, params, desc)
@@ -198,6 +204,10 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         }
+                    when (selectedTab) {
+                        0 -> LiveScreen(uiState)
+                        1 -> ControlsScreen(uiState, sendControlAction)
+                        5 -> EvChargerScreen(uiState, sendControlAction)
                         2 -> HistoryScreen(
                             state = uiState,
                             onSelectRange = { days -> loadHistoryAsync(days) },

@@ -107,6 +107,7 @@ poller = AsyncPlantPoller(
     db=db,
     config=property_config,
     broadcast_cb=ws_hub.broadcast,
+    config_path=DEFAULT_CONFIG_PATH,
 )
 
 
@@ -475,6 +476,10 @@ async def api_save_config(req: PropertyConfigRequest):
         has_solar_pv=req.has_solar_pv if req.has_solar_pv in ("auto", "yes", "no") else "auto",
         poll_interval_s=max(2.0, float(req.poll_interval_s)),
         api_token=poller.config.api_token or secrets.token_urlsafe(32),
+        evc_charging_mode=poller.config.evc_charging_mode,
+        evc_max_battery_discharge_w=poller.config.evc_max_battery_discharge_w,
+        evc_solar_export_split_pct=poller.config.evc_solar_export_split_pct,
+        evc_user_charge_limit_a=poller.config.evc_user_charge_limit_a,
     )
     save_config(DEFAULT_CONFIG_PATH, cfg)
     await poller.apply_config(cfg)

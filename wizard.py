@@ -713,7 +713,7 @@ class DiscoverPiPage(QWizardPage):
     def __init__(self) -> None:
         super().__init__()
         self.setTitle("Step 2: Auto-Detect Raspberry Pis on Local Network")
-        self.setSubTitle("Select a detected Raspberry Pi below, or click Next to enter an IP address manually.")
+        self.setSubTitle("Select a detected Raspberry Pi below, or enter an IP address manually to continue.")
         self._worker: NetworkScanWorker | None = None
 
         layout = QVBoxLayout(self)
@@ -753,14 +753,19 @@ class DiscoverPiPage(QWizardPage):
 
         self.selected_ip_edit = QLineEdit()
         self.selected_ip_edit.setFixedHeight(34)
-        self.selected_ip_edit.setPlaceholderText("Selected IP (or leave blank to enter manually on next step)")
+        self.selected_ip_edit.setPlaceholderText("Selected IP (or enter an IP address manually)")
         self.registerField("detected_ip", self.selected_ip_edit)
+        self.selected_ip_edit.textChanged.connect(lambda: self.completeChanged.emit())
         row_sel = QHBoxLayout()
         row_sel.addWidget(QLabel("Selected Target IP:"))
         row_sel.addWidget(self.selected_ip_edit, 1)
         layout.addLayout(row_sel)
 
+    def isComplete(self) -> bool:
+        return bool(self.selected_ip_edit.text().strip())
+
     def initializePage(self) -> None:
+        self.completeChanged.emit()
         if self.table.rowCount() == 0:
             self.start_scan()
 

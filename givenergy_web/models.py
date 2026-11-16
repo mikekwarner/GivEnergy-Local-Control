@@ -222,6 +222,9 @@ class EVChargerTelemetry:
     evse_min_current_a: float = 6.0
     plug_and_go_enabled: bool = True
     charge_control_state: str = "Ready"
+    charging_mode: str = "Grid"  # "Solar", "Hybrid", or "Grid"
+    max_battery_discharge_w: int = 0  # 0..5000 W
+    solar_export_split_pct: int = 0  # 0..100 %
 
     # Session & Lifetime Energy
     session_energy_kwh: float = 0.0

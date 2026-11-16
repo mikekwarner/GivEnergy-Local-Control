@@ -132,7 +132,7 @@ fun LiveScreen(state: PlantUiState) {
             }
         }
 
-        // 2x2 Power Flow Grid
+        // 3x2 Power Flow Grid
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
@@ -143,9 +143,10 @@ fun LiveScreen(state: PlantUiState) {
                         accent = AccentSolar,
                         modifier = Modifier.weight(1f),
                     )
+                    val houseLoadW = max(0.0, inv.pLoad - (if (evc.enabled) evc.powerW else 0.0))
                     PowerTile(
                         title = "HOME LOAD",
-                        value = fmtWatts(inv.pLoad),
+                        value = fmtWatts(houseLoadW),
                         sub = "${String.format("%.1f", inv.eLoadToday)} kWh today",
                         accent = AccentLoad,
                         modifier = Modifier.weight(1f),
@@ -178,6 +179,37 @@ fun LiveScreen(state: PlantUiState) {
                         accent = if (gridExporting) AccentGridExport else AccentGridImport,
                         modifier = Modifier.weight(1f),
                     )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    PowerTile(
+                        title = "EV CHARGER",
+                        value = if (evc.enabled) fmtWatts(evc.powerW) else "Disabled",
+                        sub = if (evc.enabled) "${evc.chargeStatus} • ${String.format("%.1f", evc.sessionEnergyKwh)} kWh" else "Disabled in setup",
+                        accent = AccentEvc,
+                        modifier = Modifier.weight(1f),
+                    )
+                    val cs = state.costSummary
+                    val sym = cs.currencySymbol
+                    val netPrefix = if (cs.todayNetCostGbp < 0) "-" else ""
+                    PowerTile(
+                        title = "TODAY EST. COST",
+                        value = "$netPrefix$sym${String.format("%.2f", kotlin.math.abs(cs.todayNetCostGbp))}",
+                        sub = "In $sym${String.format("%.2f", cs.todayImportCostGbp)} • Out $sym${String.format("%.2f", cs.todayExportIncomeGbp)}",
+                        accent = if (cs.todayNetCostGbp <= 0) AccentBat else AccentSolar,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+
+        // Live 2-Hour Power Chart (underneath power squares, above the rest)
+        if (state.liveRing.size >= 2) {
+            item {
+                SectionCard(
+                    title = "Live Power Trend (Last 2 hours)",
+                    subtitle = "Yellow: PV • Purple: Load • Green: Battery • Red: Grid",
+                ) {
+                    LiveSparklineChart(points = state.liveRing)
                 }
             }
         }
@@ -232,18 +264,6 @@ fun LiveScreen(state: PlantUiState) {
                             Text("${evc.chargeLimitA.roundToInt()} A", color = TextMain, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                         }
                     }
-                }
-            }
-        }
-
-        // Live 15-Min Power Chart
-        if (state.liveRing.size >= 2) {
-            item {
-                SectionCard(
-                    title = "Live Power Trend (Last 15 min)",
-                    subtitle = "Yellow: PV • Purple: Load • Green: Battery • Red: Grid",
-                ) {
-                    LiveSparklineChart(points = state.liveRing)
                 }
             }
         }
@@ -314,7 +334,7 @@ private fun LiveSparklineChart(points: List<LivePoint>) {
     Canvas(
         modifier = Modifier
             .fillMaxWidth()
-            .height(150.dp)
+            .height(300.dp)
     ) {
         val w = size.width
         val h = size.height
@@ -350,20 +370,38 @@ private fun LiveSparklineChart(points: List<LivePoint>) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
+private fun EvcModeChipRow(
+    selectedMode: String,
+    onSelectMode: (String) -> Unit,
+) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        listOf("Solar", "Hybrid", "Grid").forEach { mode ->
+            FilterChip(
+                selected = selectedMode.equals(mode, ignoreCase = true),
+                onClick = { onSelectMode(mode) },
+                label = { Text(mode) },
+                colors = FilterChipDefaults.filterChipColors(selectedContainerColor = AccentPrimary),
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
 fun ControlsScreen(
     state: PlantUiState,
     onControl: (target: String, action: String, params: Map<String, Any>, desc: String) -> Unit,
 ) {
     val inv = state.inverter
-    val evc = state.evc
 
     var targetSoc by remember { mutableFloatStateOf(inv.chargeTargetSoc.toFloat()) }
     var reserveSoc by remember { mutableFloatStateOf(inv.batterySocReserve.toFloat()) }
-    var evcAmps by remember { mutableFloatStateOf(evc.chargeLimitA.toFloat()) }
 
     LaunchedEffect(inv.chargeTargetSoc) { targetSoc = inv.chargeTargetSoc.toFloat() }
     LaunchedEffect(inv.batterySocReserve) { reserveSoc = inv.batterySocReserve.toFloat() }
-    LaunchedEffect(evc.chargeLimitA) { evcAmps = evc.chargeLimitA.toFloat() }
 
     LazyColumn(
         modifier = Modifier
@@ -378,27 +416,32 @@ fun ControlsScreen(
                 title = "⚡ Inverter Mode & Battery",
                 subtitle = "Current: ${inv.operatingMode}",
             ) {
+                val isEcoMode = inv.connected && inv.operatingMode.startsWith("Eco")
+                val isTimedDisMode = inv.connected && inv.operatingMode.startsWith("Timed Discharge")
+                val isTimedExpMode = inv.connected && inv.operatingMode.startsWith("Timed Export")
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     FilterChip(
-                        selected = inv.ecoMode,
+                        selected = isEcoMode,
                         onClick = {
                             onControl("inverter", "set_mode_eco", mapOf("enabled" to !inv.ecoMode), "Toggle Eco Mode")
                         },
                         label = { Text("Eco Mode") },
+                        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = AccentBat),
+                    )
+                    FilterChip(
+                        selected = isTimedDisMode,
+                        onClick = { onControl("inverter", "set_mode_timed_discharge", emptyMap(), "Set Timed Discharge") },
+                        label = { Text("Timed Discharge") },
                         colors = FilterChipDefaults.filterChipColors(selectedContainerColor = AccentPrimary),
                     )
                     FilterChip(
-                        selected = false,
-                        onClick = { onControl("inverter", "set_mode_timed_discharge", emptyMap(), "Set Timed Discharge") },
-                        label = { Text("Timed Discharge") },
-                    )
-                    FilterChip(
-                        selected = false,
+                        selected = isTimedExpMode,
                         onClick = { onControl("inverter", "set_mode_timed_export", emptyMap(), "Set Timed Export") },
                         label = { Text("Timed Export") },
+                        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = AccentSolar),
                     )
                 }
 
@@ -478,15 +521,69 @@ fun ControlsScreen(
             }
         }
 
-        if (evc.enabled) {
+        item { Spacer(Modifier.height(8.dp)) }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun EvChargerScreen(
+    state: PlantUiState,
+    onControl: (target: String, action: String, params: Map<String, Any>, desc: String) -> Unit,
+) {
+    val evc = state.evc
+
+    var maxBatDischargeW by remember { mutableFloatStateOf(evc.maxBatteryDischargeW.toFloat()) }
+    var solarExportSplitPct by remember { mutableFloatStateOf(evc.solarExportSplitPct.toFloat()) }
+    var evcAmps by remember { mutableFloatStateOf(evc.chargeLimitA.toFloat()) }
+
+    val isDynamicSolar = evc.chargingMode.equals("Solar", ignoreCase = true) ||
+        evc.chargingMode.equals("Hybrid", ignoreCase = true)
+
+    LaunchedEffect(evc.maxBatteryDischargeW) { maxBatDischargeW = evc.maxBatteryDischargeW.toFloat() }
+    LaunchedEffect(evc.solarExportSplitPct) { solarExportSplitPct = evc.solarExportSplitPct.toFloat() }
+    LaunchedEffect(evc.chargeLimitA, isDynamicSolar) {
+        if (!isDynamicSolar) {
+            evcAmps = evc.chargeLimitA.toFloat()
+        }
+    }
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        item { Spacer(Modifier.height(2.dp)) }
+
+        if (!evc.enabled) {
+            item {
+                SectionCard(title = "🚗 EV Charger Disabled") {
+                    Text(
+                        "EV Charger monitoring is currently disabled in Property Setup.",
+                        color = TextMuted,
+                        fontSize = 13.sp,
+                    )
+                }
+            }
+        } else {
             item {
                 SectionCard(
                     title = "🚗 EV Charger Controls",
                     subtitle = "${evc.chargeStatus} • ${evc.chargeControlState}",
                 ) {
+                    val evcCharging = (
+                        evc.chargeStatus == "Charging"
+                            || evc.chargeStatus == "Starting"
+                            || evc.chargeControlState == "Start"
+                            || evc.powerW > 150.0
+                    )
+                    val canStartEvc = evc.connected && evc.cableConnected && !evcCharging
+                    val canStopEvc = evc.connected && evcCharging
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                         Button(
                             onClick = { onControl("evc", "charge_control", mapOf("action" to "start"), "Start EV Charge") },
+                            enabled = canStartEvc,
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669)),
                             modifier = Modifier.weight(1f),
                         ) {
@@ -494,6 +591,7 @@ fun ControlsScreen(
                         }
                         Button(
                             onClick = { onControl("evc", "charge_control", mapOf("action" to "stop"), "Stop EV Charge") },
+                            enabled = canStopEvc,
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
                             modifier = Modifier.weight(1f),
                         ) {
@@ -502,6 +600,73 @@ fun ControlsScreen(
                     }
 
                     Spacer(Modifier.height(10.dp))
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Charge Current Limit", color = TextMuted, fontSize = 13.sp)
+                        Text("${evcAmps.roundToInt()} A", color = AccentEvc, fontWeight = FontWeight.Bold)
+                    }
+                    Slider(
+                        value = evcAmps.coerceIn(evc.minCurrentA.toFloat(), evc.maxCurrentA.toFloat()),
+                        onValueChange = { evcAmps = it },
+                        enabled = !isDynamicSolar,
+                        valueRange = evc.minCurrentA.toFloat()..evc.maxCurrentA.toFloat(),
+                        colors = SliderDefaults.colors(thumbColor = AccentEvc, activeTrackColor = AccentEvc),
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            val amps = evcAmps.roundToInt()
+                            onControl("evc", "current_limit", mapOf("amps" to amps), "Set EV Limit to ${amps}A")
+                        },
+                        enabled = !isDynamicSolar,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            if (isDynamicSolar) "Current Limit Managed by ${evc.chargingMode} Mode"
+                            else "Apply Current Limit (${evcAmps.roundToInt()} A)"
+                        )
+                    }
+                }
+            }
+
+            item {
+                SectionCard(
+                    title = "🚗 EV Charger Status",
+                    subtitle = "${evc.chargeStatus} • ${evc.chargeControlState} • Mode: ${evc.chargingMode}",
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Column {
+                            Text("Power", color = TextMuted, fontSize = 11.sp)
+                            Text(fmtWatts(evc.powerW), color = AccentEvc, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Column {
+                            Text("Session", color = TextMuted, fontSize = 11.sp)
+                            Text("${String.format("%.1f", evc.sessionEnergyKwh)} kWh", color = TextMain, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text("Limit", color = TextMuted, fontSize = 11.sp)
+                            Text("${evc.chargeLimitA.roundToInt()} A", color = TextMain, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    StatRow("Total Meter Energy", "${String.format("%.1f", evc.totalMeterKwh)} kWh")
+                }
+            }
+
+            item {
+                SectionCard(
+                    title = "⚡ Mode & Solar / Battery Settings",
+                    subtitle = "Mode: ${evc.chargingMode}",
+                ) {
+                    Text("Mode: Solar, Hybrid or Grid", color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(6.dp))
+                    EvcModeChipRow(selectedMode = evc.chargingMode) { mode ->
+                        onControl("evc", "set_charging_mode", mapOf("mode" to mode), "Set EV Mode to $mode")
+                    }
+
+                    HorizontalDivider(color = BorderCard, modifier = Modifier.padding(vertical = 10.dp))
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -517,29 +682,52 @@ fun ControlsScreen(
                         )
                     }
 
-                    Spacer(Modifier.height(8.dp))
+                    HorizontalDivider(color = BorderCard, modifier = Modifier.padding(vertical = 10.dp))
 
+                    val roundedBatW = ((maxBatDischargeW / 100f).roundToInt() * 100).coerceIn(0, 5000)
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Charge Current Limit", color = TextMuted, fontSize = 13.sp)
-                        Text("${evcAmps.roundToInt()} A", color = AccentEvc, fontWeight = FontWeight.Bold)
+                        Text("Max Battery Discharge Power to EV", color = TextMuted, fontSize = 13.sp)
+                        Text("$roundedBatW W", color = AccentBat, fontWeight = FontWeight.Bold)
                     }
                     Slider(
-                        value = evcAmps.coerceIn(evc.minCurrentA.toFloat(), evc.maxCurrentA.toFloat()),
-                        onValueChange = { evcAmps = it },
-                        valueRange = evc.minCurrentA.toFloat()..evc.maxCurrentA.toFloat(),
-                        colors = SliderDefaults.colors(thumbColor = AccentEvc, activeTrackColor = AccentEvc),
+                        value = maxBatDischargeW.coerceIn(0f, 5000f),
+                        onValueChange = { maxBatDischargeW = it },
+                        valueRange = 0f..5000f,
+                        colors = SliderDefaults.colors(thumbColor = AccentBat, activeTrackColor = AccentBat),
                     )
                     OutlinedButton(
                         onClick = {
-                            val amps = evcAmps.roundToInt()
-                            onControl("evc", "current_limit", mapOf("amps" to amps), "Set EV Limit to ${amps}A")
+                            onControl("evc", "set_max_battery_discharge", mapOf("power_w" to roundedBatW), "Set Max Battery Discharge Power to EV to $roundedBatW W")
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text("Apply Current Limit (${evcAmps.roundToInt()} A)")
+                        Text("Apply Max Discharge Power ($roundedBatW W)")
+                    }
+
+                    Spacer(Modifier.height(10.dp))
+
+                    val roundedSplit = ((solarExportSplitPct / 5f).roundToInt() * 5).coerceIn(0, 100)
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Solar Export Split %", color = TextMuted, fontSize = 13.sp)
+                        Text("$roundedSplit% Export / ${100 - roundedSplit}% EV", color = AccentSolar, fontWeight = FontWeight.Bold)
+                    }
+                    Slider(
+                        value = solarExportSplitPct.coerceIn(0f, 100f),
+                        onValueChange = { solarExportSplitPct = it },
+                        valueRange = 0f..100f,
+                        colors = SliderDefaults.colors(thumbColor = AccentSolar, activeTrackColor = AccentSolar),
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            onControl("evc", "set_solar_export_split", mapOf("split_pct" to roundedSplit), "Set Solar Export Split to $roundedSplit%")
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Apply Solar Export Split ($roundedSplit%)")
                     }
                 }
             }
+
         }
 
         item { Spacer(Modifier.height(8.dp)) }
@@ -604,31 +792,31 @@ fun HistoryScreen(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    FilterChip(
-                        selected = showSolar,
-                        onClick = { showSolar = !showSolar },
-                        label = { Text("Solar", fontSize = 11.sp, color = if (showSolar) AccentSolar else TextMuted) },
+                    val seriesChips = listOf(
+                        Triple("Solar", showSolar, AccentSolar) to { showSolar = !showSolar },
+                        Triple("Load", showLoad, AccentLoad) to { showLoad = !showLoad },
+                        Triple("Battery", showBat, AccentBat) to { showBat = !showBat },
+                        Triple("Grid", showGrid, AccentGridImport) to { showGrid = !showGrid },
+                        Triple("SoC %", showSoc, AccentGridExport) to { showSoc = !showSoc },
                     )
-                    FilterChip(
-                        selected = showLoad,
-                        onClick = { showLoad = !showLoad },
-                        label = { Text("Load", fontSize = 11.sp, color = if (showLoad) AccentLoad else TextMuted) },
-                    )
-                    FilterChip(
-                        selected = showBat,
-                        onClick = { showBat = !showBat },
-                        label = { Text("Battery", fontSize = 11.sp, color = if (showBat) AccentBat else TextMuted) },
-                    )
-                    FilterChip(
-                        selected = showGrid,
-                        onClick = { showGrid = !showGrid },
-                        label = { Text("Grid", fontSize = 11.sp, color = if (showGrid) AccentGridImport else TextMuted) },
-                    )
-                    FilterChip(
-                        selected = showSoc,
-                        onClick = { showSoc = !showSoc },
-                        label = { Text("SoC %", fontSize = 11.sp, color = if (showSoc) AccentGridExport else TextMuted) },
-                    )
+                    seriesChips.forEach { (meta, toggle) ->
+                        val (label, isSelected, accent) = meta
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = toggle,
+                            label = { Text(label, fontSize = 11.sp, color = if (isSelected) accent else TextMuted) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                containerColor = Color(0xFF0F172A),
+                                selectedContainerColor = Color(0xFF1E293B),
+                            ),
+                            border = FilterChipDefaults.filterChipBorder(
+                                enabled = true,
+                                selected = isSelected,
+                                borderColor = BorderCard,
+                                selectedBorderColor = accent.copy(alpha = 0.7f),
+                            ),
+                        )
+                    }
                 }
 
                 Spacer(Modifier.height(8.dp))

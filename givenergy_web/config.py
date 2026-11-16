@@ -25,6 +25,10 @@ class PropertyConfig:
     has_solar_pv: str = "auto"  # "auto", "yes", or "no"
     poll_interval_s: float = 5.0
     api_token: str = ""
+    evc_charging_mode: str = "Grid"  # "Solar", "Hybrid", or "Grid"
+    evc_max_battery_discharge_w: int = 0  # 0..5000 W
+    evc_solar_export_split_pct: int = 0  # 0..100 %
+    evc_user_charge_limit_a: int = 32
 
 
 def _env_bool(name: str, default: bool) -> bool:

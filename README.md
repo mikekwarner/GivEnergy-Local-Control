@@ -1,4 +1,4 @@
-# GivEnergy Local Control (`v1.3.0`)
+# GivEnergy Local Control (`v1.4.0`)
 
 Local, cloud-free monitoring, control, and historic telemetry server for **GivEnergy Hybrid Inverters, Batteries, and EV Chargers**, designed to run 24/7 on a **Raspberry Pi** (Pi 400, Pi 4, Pi 5, etc.) with a standalone **Windows Deployment Installer**.
 
@@ -9,7 +9,8 @@ Local, cloud-free monitoring, control, and historic telemetry server for **GivEn
 ## Key Features
 
 - **100% Local Modbus TCP Control** — Direct local communication with GivEnergy Hybrid Inverters (`:8899`) and EV Chargers (`:502`) with no cloud dependency.
-- **Real-Time Power Flow & Live Dashboard** — Responsive web UI (desktop & mobile) with WebSocket updates, live power flow schematic, KPI cards, 2-hour 5-second timeline chart (backfilled from 1-minute SQLite history on startup), and a **Clock Sync & Connection** panel displaying local time alongside Inverter and EV Charger RTC clock drift.
+- **Smart EV Charger Modes (Solar / Hybrid / Grid)** — Dynamic excess-solar EV charging with configurable **Solar Export Split %**, **Max Battery Discharge Power to EV**, automatic Solar start/stop, and schedule-safe full-power operation for timed/overnight tariffs.
+- **Real-Time Power Flow & Live Dashboard** — Responsive web UI (desktop & mobile) with WebSocket updates, live power flow schematic (showing house-only Home Demand while keeping EV load in historic totals), KPI cards, double-height 2-hour timeline chart (backfilled from 1-minute SQLite history on startup), configurable polling rate (`5s` / `10s` / `15s` / `30s` / `1m`), and a **Clock Sync & Connection** panel displaying local time alongside Inverter and EV Charger RTC clock drift.
 - **Historic Telemetry (Storage-Safe SQLite WAL)** — Configurable RAM-batched writes for MicroSD wear-protection (`60s` flush + volatile journald logs) or NVMe/USB SSD tuning (`15s` flush + `fstrim`), with **Days / Weeks / Months / Years** energy aggregation views and interactive bar-chart hover tooltips.
 - **Battery & BMS + Grid Voltage Views** — Per-cell voltage monitoring, BMS status, and grid voltage history charts.
 - **Auto-Discovery & Property Setup** — Automatically scans your local `/24` subnet for GivEnergy Inverters and EV Chargers on first setup and saves configuration to `property_config.json`.
@@ -24,7 +25,7 @@ Local, cloud-free monitoring, control, and historic telemetry server for **GivEn
 
 ## Quick Start (Windows)
 
-1. Download **`GivEnergy-Local-Control-Installer.exe`** from the [**v1.3.0 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v1.3.0).
+1. Download **`GivEnergy-Local-Control-Installer.exe`** from the [**v1.4.0 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v1.4.0).
 2. Double-click `GivEnergy-Local-Control-Installer.exe` and follow the 6-step wizard:
    - **Step 1:** Prepare a Raspberry Pi OS Lite SD/SSD card using Raspberry Pi Imager (auto-detected if installed).
    - **Step 2:** Auto-detect Raspberry Pis on your local network (also shows currently installed version & available upgrades).
@@ -37,7 +38,7 @@ Local, cloud-free monitoring, control, and historic telemetry server for **GivEn
 
 ## Android Companion App
 
-1. Download **`givenergy-local-control.apk`** from the [**v1.3.0 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v1.3.0) and install it on your Android phone (enable *Install unknown apps* if prompted).
+1. Download **`givenergy-local-control.apk`** from the [**v1.4.0 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v1.4.0) and install it on your Android phone (enable *Install unknown apps* if prompted).
 2. Enable **Tailscale Funnel** during Step 4 of the Windows Installer (or view your pairing details in the dashboard under **⚙ Property Setup → Remote Access**).
 3. Open **GivEnergy Local Control** on your phone and scan the **QR Code** (or paste your Funnel HTTPS URL and Bearer Token) to pair.
 

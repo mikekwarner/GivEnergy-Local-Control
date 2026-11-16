@@ -26,6 +26,7 @@ FILES_TO_DEPLOY = [
     ("givenergy_web/poller.py", "givenergy_web/poller.py"),
     ("givenergy_web/server.py", "givenergy_web/server.py"),
     ("givenergy_web/tariffs.py", "givenergy_web/tariffs.py"),
+    ("givenergy_web/updater.py", "givenergy_web/updater.py"),
     ("givenergy_web/static/index.html", "givenergy_web/static/index.html"),
     ("givenergy_web/static/manifest.json", "givenergy_web/static/manifest.json"),
     ("givenergy_web/static/icon.ico", "givenergy_web/static/icon.ico"),
@@ -139,8 +140,8 @@ def main(
             sudo_rule = (
                 f"Defaults:{user} env_keep += \"DEBIAN_FRONTEND\"\n"
                 f"{user} ALL=(root) NOPASSWD: "
-                "/bin/systemctl reboot, /bin/systemctl poweroff, "
-                "/usr/bin/systemctl reboot, /usr/bin/systemctl poweroff, "
+                "/bin/systemctl reboot, /bin/systemctl poweroff, /bin/systemctl restart givenergy-web.service, "
+                "/usr/bin/systemctl reboot, /usr/bin/systemctl poweroff, /usr/bin/systemctl restart givenergy-web.service, "
                 "/sbin/reboot, /sbin/poweroff, /usr/sbin/reboot, /usr/sbin/poweroff, "
                 "/usr/bin/apt-get update, /usr/bin/apt-get upgrade -y\n"
             )

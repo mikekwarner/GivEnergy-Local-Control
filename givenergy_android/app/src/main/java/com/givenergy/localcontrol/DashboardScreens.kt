@@ -41,8 +41,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -53,9 +55,12 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
+import java.io.File
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -1169,7 +1174,143 @@ fun SystemScreen(
             }
         }
 
+        item {
+            AndroidAppUpdateCard()
+        }
+
         item { Spacer(Modifier.height(8.dp)) }
+    }
+}
+
+@Composable
+private fun AndroidAppUpdateCard() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val currentVersion = remember { AppUpdater.getCurrentVersionName(context) }
+
+    var checking by remember { mutableStateOf(false) }
+    var downloading by remember { mutableStateOf(false) }
+    var downloadPct by remember { mutableIntStateOf(0) }
+    var releaseInfo by remember { mutableStateOf<AndroidReleaseInfo?>(null) }
+    var downloadedApk by remember { mutableStateOf<File?>(null) }
+    var statusText by remember { mutableStateOf<String?>(null) }
+    var statusColor by remember { mutableStateOf(TextMuted) }
+
+    SectionCard(title = "📦 Android App Updates (GitHub)") {
+        StatRow("Installed Version", "v$currentVersion")
+        val latestLabel = when {
+            checking -> "Checking…"
+            releaseInfo == null -> "Not checked"
+            releaseInfo?.ok == true -> "v${releaseInfo?.latestVersion}"
+            else -> "Check failed"
+        }
+        val latestColor = when {
+            releaseInfo?.updateAvailable == true -> AccentSolar
+            releaseInfo?.ok == true -> AccentBat
+            releaseInfo != null && releaseInfo?.ok == false -> AccentGridImport
+            else -> TextMain
+        }
+        StatRow("GitHub Latest", latestLabel, latestColor)
+
+        if (!statusText.isNullOrBlank()) {
+            Spacer(Modifier.height(6.dp))
+            Text(statusText!!, color = statusColor, fontSize = 12.sp)
+        }
+
+        if (downloading) {
+            Spacer(Modifier.height(8.dp))
+            LinearProgressIndicator(
+                progress = { (downloadPct / 100f).coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth(),
+                color = AccentPrimary,
+                trackColor = Color(0xFF1F2937),
+            )
+            Spacer(Modifier.height(4.dp))
+            Text("Downloading APK… $downloadPct%", color = TextMuted, fontSize = 11.sp)
+        }
+
+        Spacer(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            OutlinedButton(
+                enabled = !checking && !downloading,
+                onClick = {
+                    scope.launch {
+                        checking = true
+                        statusText = "Checking GitHub Releases…"
+                        statusColor = TextMuted
+                        val info = AppUpdater.checkLatestRelease(context)
+                        releaseInfo = info
+                        checking = false
+                        if (!info.ok) {
+                            statusText = info.error ?: "Failed to check GitHub."
+                            statusColor = AccentGridImport
+                        } else if (info.updateAvailable) {
+                            statusText = "Update available: v${info.latestVersion}"
+                            statusColor = AccentSolar
+                        } else {
+                            statusText = "You are on the latest version."
+                            statusColor = AccentBat
+                        }
+                    }
+                },
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(if (checking) "Checking…" else "Check Updates")
+            }
+
+            val apkUrl = releaseInfo?.apkUrl
+            val canDownload = !checking && !downloading && (releaseInfo?.updateAvailable == true) && !apkUrl.isNullOrBlank()
+            Button(
+                enabled = canDownload || (downloadedApk != null && !downloading),
+                onClick = {
+                    val existing = downloadedApk
+                    if (existing != null && existing.exists() && !downloading) {
+                        val launched = AppUpdater.installApk(context, existing)
+                        if (!launched) {
+                            statusText = "Allow 'Install unknown apps' in Settings, then tap Install again."
+                            statusColor = AccentSolar
+                        }
+                        return@Button
+                    }
+                    if (apkUrl.isNullOrBlank()) return@Button
+                    scope.launch {
+                        downloading = true
+                        downloadPct = 0
+                        statusText = "Downloading v${releaseInfo?.latestVersion ?: ""}…"
+                        statusColor = TextMuted
+                        try {
+                            val apkFile = AppUpdater.downloadApk(context, apkUrl) { pct ->
+                                downloadPct = pct
+                            }
+                            downloadedApk = apkFile
+                            downloading = false
+                            val launched = AppUpdater.installApk(context, apkFile)
+                            if (launched) {
+                                statusText = "Installer opened. Follow the prompt to update."
+                                statusColor = AccentBat
+                            } else {
+                                statusText = "Allow 'Install unknown apps' in Settings, then tap Install."
+                                statusColor = AccentSolar
+                            }
+                        } catch (e: Exception) {
+                            downloading = false
+                            statusText = "Download failed: ${e.message ?: "Unknown error"}"
+                            statusColor = AccentGridImport
+                        }
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = AccentPrimary),
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(
+                    when {
+                        downloading -> "$downloadPct%"
+                        downloadedApk != null -> "Install APK"
+                        else -> "Update App"
+                    }
+                )
+            }
+        }
     }
 }
 

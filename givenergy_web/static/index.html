@@ -730,7 +730,7 @@
     <div class="brand">
       <div class="brand-icon">⚡</div>
       <div>
-        <div class="brand-title" id="hdr-title"><span id="hdr-title-text">GivEnergy Local Control &amp; Historic Server</span> <span id="hdr-version" style="font-size:11px; font-weight:600; color:#93C5FD; background:#111827; border:1px solid #2E3F5E; border-radius:999px; padding:1px 7px; margin-left:6px; vertical-align:middle;">v1.4.1</span></div>
+        <div class="brand-title" id="hdr-title"><span id="hdr-title-text">GivEnergy Local Control &amp; Historic Server</span> <span id="hdr-version" style="font-size:11px; font-weight:600; color:#93C5FD; background:#111827; border:1px solid #2E3F5E; border-radius:999px; padding:1px 7px; margin-left:6px; vertical-align:middle;">v1.5.0</span></div>
         <div class="brand-sub" id="hdr-sub">Raspberry Pi • Auto-Adaptive Local Telemetry &amp; Control</div>
       </div>
     </div>
@@ -1495,6 +1495,35 @@
         <div class="panel" style="margin-top:16px;">
           <div class="panel-header">
             <div>
+              <div class="panel-title">📦 GivEnergy App Updates (GitHub)</div>
+              <div class="panel-sub">Check for and install the latest GivEnergy Local Control package from <a href="https://github.com/mikekwarner/GivEnergy-Local-Control" target="_blank" rel="noopener noreferrer" style="color:#60A5FA;">github.com/mikekwarner/GivEnergy-Local-Control</a> (preserves your database &amp; settings)</div>
+            </div>
+          </div>
+          <div style="display:flex; gap:18px; flex-wrap:wrap; align-items:center; font-size:12.5px; color:#CBD5E1; margin-bottom:12px; background:#090D16; border:1px solid #1F2A40; border-radius:8px; padding:10px 14px;">
+            <div>Installed: <strong id="app-cur-ver" style="color:#F8FAFC;">--</strong></div>
+            <div>GitHub Latest: <strong id="app-remote-ver" style="color:#93C5FD;">Not checked</strong></div>
+            <div id="app-commit-info" style="color:#94A3B8; font-size:12px;"></div>
+            <span id="app-update-badge" style="display:none; margin-left:auto; padding:3px 10px; border-radius:999px; font-size:11.5px; font-weight:600;"></span>
+          </div>
+          <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px;">
+            <button class="btn" id="btn-app-check" onclick="checkAppUpdate()">🔍 Check for App Updates</button>
+            <button class="btn primary" id="btn-app-install" style="display:none;" onclick="runAppUpdate()">⬇ Update App from GitHub</button>
+          </div>
+          <div id="app-update-progress-wrap" style="display:none; margin-bottom:10px;">
+            <div style="display:flex; justify-content:space-between; font-size:12px; color:#93C5FD; margin-bottom:5px;">
+              <span id="app-update-status-lbl">Checking GitHub…</span>
+              <span id="app-update-pct-lbl">0%</span>
+            </div>
+            <div style="width:100%; height:10px; background:#090D16; border:1px solid #1F2A40; border-radius:999px; overflow:hidden;">
+              <div id="app-update-progress-bar" style="width:0%; height:100%; background:linear-gradient(90deg, #3B82F6, #10B981); transition:width 0.35s ease;"></div>
+            </div>
+          </div>
+          <pre id="app-update-log" style="display:none; background:#090D16; border:1px solid #1F2A40; border-radius:8px; padding:12px; color:#CBD5E1; font-size:12px; max-height:240px; overflow:auto; white-space:pre-wrap; margin:0;"></pre>
+        </div>
+
+        <div class="panel" style="margin-top:16px;">
+          <div class="panel-header">
+            <div>
               <div class="panel-title">🛠 Raspberry Pi System Actions &amp; Maintenance</div>
               <div class="panel-sub">Restart, shut down, or install Raspberry Pi OS software updates directly from this dashboard</div>
             </div>
@@ -1995,6 +2024,8 @@
       if (sys.app_version) {
         const verEl = document.getElementById('hdr-version');
         if (verEl) verEl.textContent = `v${sys.app_version}`;
+        const curAppVer = document.getElementById('app-cur-ver');
+        if (curAppVer) curAppVer.textContent = `v${sys.app_version}`;
       }
       if (sys.hardware_short) {
         const piTabBtn = document.getElementById('tab-btn-pi');
@@ -3461,7 +3492,7 @@
 
       if (sys && sys.hostname) {
         const piRows = [
-          ['App Version', `v${sys.app_version || '1.4.1'}`],
+          ['App Version', `v${sys.app_version || '1.5.0'}`],
           ['Hostname & Hardware', `${sys.hostname} (${sys.hardware_model || 'Raspberry Pi'})`],
           ['Operating System & Python', `${sys.os_release} • Python ${sys.python_version}`],
           ['CPU Temperature', `${sys.cpu_temp_c ?? '—'} °C`],
@@ -3873,6 +3904,173 @@
       } finally {
         btnReboot.disabled = false;
         btnShutdown.disabled = false;
+      }
+    }
+
+    let _appUpdateTimer = null;
+    let _appReconnectTimer = null;
+
+    async function checkAppUpdate() {
+      const btnCheck = document.getElementById('btn-app-check');
+      const btnInstall = document.getElementById('btn-app-install');
+      const remoteEl = document.getElementById('app-remote-ver');
+      const commitEl = document.getElementById('app-commit-info');
+      const badgeEl = document.getElementById('app-update-badge');
+      const curEl = document.getElementById('app-cur-ver');
+
+      btnCheck.disabled = true;
+      btnCheck.textContent = '⏳ Checking GitHub...';
+      if (btnInstall) btnInstall.style.display = 'none';
+      remoteEl.textContent = 'Checking...';
+      commitEl.textContent = '';
+      badgeEl.style.display = 'none';
+
+      try {
+        const res = await fetch('/api/system/app-update/check');
+        const data = await res.json();
+        if (data.current_version && curEl) curEl.textContent = `v${data.current_version}`;
+        if (!data.ok) {
+          remoteEl.textContent = 'Check failed';
+          remoteEl.style.color = '#FB7185';
+          commitEl.textContent = data.error || 'Could not reach GitHub.';
+          showToast('GitHub update check failed');
+          return;
+        }
+        remoteEl.textContent = `v${data.remote_version}`;
+        remoteEl.style.color = data.update_available ? '#FBBF24' : '#34D399';
+        if (data.latest_commit_sha) {
+          const msg = data.latest_commit_message ? ` — ${data.latest_commit_message}` : '';
+          commitEl.textContent = `Commit ${data.latest_commit_sha}${msg}`;
+        }
+        if (btnInstall) {
+          btnInstall.style.display = data.update_available ? 'inline-flex' : 'none';
+        }
+        badgeEl.style.display = 'inline-block';
+        if (data.update_available) {
+          badgeEl.textContent = 'Update Available';
+          badgeEl.style.background = 'rgba(245, 158, 11, 0.18)';
+          badgeEl.style.color = '#FDE68A';
+          badgeEl.style.border = '1px solid rgba(245, 158, 11, 0.45)';
+          showToast(`Update available: v${data.remote_version}`);
+        } else {
+          badgeEl.textContent = 'Up to Date';
+          badgeEl.style.background = 'rgba(16, 185, 129, 0.16)';
+          badgeEl.style.color = '#6EE7B7';
+          badgeEl.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+          showToast('App is up to date');
+        }
+      } catch (e) {
+        remoteEl.textContent = 'Check failed';
+        remoteEl.style.color = '#FB7185';
+        commitEl.textContent = String(e);
+        showToast('GitHub update check failed');
+      } finally {
+        btnCheck.disabled = false;
+        btnCheck.textContent = '🔍 Check for App Updates';
+      }
+    }
+
+    function waitForAppReconnect(targetVersion) {
+      const statusLbl = document.getElementById('app-update-status-lbl');
+      const logBox = document.getElementById('app-update-log');
+      if (_appReconnectTimer) clearTimeout(_appReconnectTimer);
+
+      const attempt = async () => {
+        try {
+          const res = await fetch('/api/snapshot', { cache: 'no-store' });
+          if (res.ok) {
+            statusLbl.textContent = `✅ Service restarted${targetVersion ? ` (v${targetVersion})` : ''}! Reloading dashboard…`;
+            statusLbl.style.color = '#34D399';
+            logBox.textContent += '\nService is back online! Reloading page...';
+            logBox.scrollTop = logBox.scrollHeight;
+            setTimeout(() => window.location.reload(), 900);
+            return;
+          }
+        } catch (e) {
+          // Server still restarting
+        }
+        _appReconnectTimer = setTimeout(attempt, 2000);
+      };
+      _appReconnectTimer = setTimeout(attempt, 2500);
+    }
+
+    async function pollAppUpdateStatus() {
+      const wrap = document.getElementById('app-update-progress-wrap');
+      const statusLbl = document.getElementById('app-update-status-lbl');
+      const pctLbl = document.getElementById('app-update-pct-lbl');
+      const bar = document.getElementById('app-update-progress-bar');
+      const logBox = document.getElementById('app-update-log');
+      const btnInstall = document.getElementById('btn-app-install');
+      const btnCheck = document.getElementById('btn-app-check');
+
+      try {
+        const res = await fetch('/api/system/app-update/status');
+        const st = await res.json();
+        wrap.style.display = 'block';
+        logBox.style.display = 'block';
+        statusLbl.textContent = st.status_text || 'Updating…';
+        const pct = Math.max(0, Math.min(100, Number(st.percent || 0)));
+        pctLbl.textContent = `${pct}%`;
+        bar.style.width = `${pct}%`;
+        if (st.output) {
+          logBox.textContent = st.output;
+          logBox.scrollTop = logBox.scrollHeight;
+        }
+        if (st.running) {
+          _appUpdateTimer = setTimeout(pollAppUpdateStatus, 750);
+        } else {
+          _appUpdateTimer = null;
+          if (st.restarting) {
+            statusLbl.style.color = '#34D399';
+            showToast('Update installed — restarting service…');
+            waitForAppReconnect(st.remote_version);
+          } else {
+            btnInstall.disabled = false;
+            btnCheck.disabled = false;
+            btnInstall.textContent = '⬇ Update App from GitHub';
+            statusLbl.style.color = st.ok ? '#34D399' : '#FB7185';
+            showToast(st.ok ? 'App update complete!' : 'App update failed');
+          }
+        }
+      } catch (e) {
+        _appUpdateTimer = setTimeout(pollAppUpdateStatus, 1200);
+      }
+    }
+
+    async function runAppUpdate() {
+      if (!confirm('Download the latest GivEnergy Local Control package from GitHub and restart the web service? Your database and settings will be preserved.')) {
+        return;
+      }
+      if (_appUpdateTimer) clearTimeout(_appUpdateTimer);
+      if (_appReconnectTimer) clearTimeout(_appReconnectTimer);
+
+      const btnInstall = document.getElementById('btn-app-install');
+      const btnCheck = document.getElementById('btn-app-check');
+      const wrap = document.getElementById('app-update-progress-wrap');
+      const statusLbl = document.getElementById('app-update-status-lbl');
+      const pctLbl = document.getElementById('app-update-pct-lbl');
+      const bar = document.getElementById('app-update-progress-bar');
+      const logBox = document.getElementById('app-update-log');
+
+      btnInstall.disabled = true;
+      btnCheck.disabled = true;
+      btnInstall.textContent = '⏳ Updating from GitHub...';
+      wrap.style.display = 'block';
+      logBox.style.display = 'block';
+      statusLbl.style.color = '#93C5FD';
+      statusLbl.textContent = 'Starting GitHub update…';
+      pctLbl.textContent = '5%';
+      bar.style.width = '5%';
+      logBox.textContent = 'Connecting to GitHub...';
+
+      try {
+        await fetch('/api/system/app-update', { method: 'POST' });
+        pollAppUpdateStatus();
+      } catch (e) {
+        logBox.textContent = `Request failed: ${e}`;
+        btnInstall.disabled = false;
+        btnCheck.disabled = false;
+        btnInstall.textContent = '⬇ Update App from GitHub';
       }
     }
 

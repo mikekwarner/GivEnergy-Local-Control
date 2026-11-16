@@ -34,6 +34,7 @@ from givenergy_web import __version__ as APP_VERSION
 from givenergy_web.config import PropertyConfig, _detect_local_ipv4, load_config, save_config, scan_lan_for_devices
 from givenergy_web.database import HistoricDatabase
 from givenergy_web.poller import AsyncPlantPoller
+from givenergy_web.updater import check_github_update, get_app_update_status, start_app_update
 from givenergy_web.tariffs import (
     UK_GSP_REGIONS,
     UK_TARIFF_PRESETS,
@@ -1170,6 +1171,23 @@ async def api_system_update():
 async def api_system_update_status():
     with _update_lock:
         return JSONResponse(dict(_update_state))
+
+
+@app.get("/api/system/app-update/check")
+async def api_system_app_update_check():
+    info = await asyncio.to_thread(check_github_update, APP_VERSION)
+    return JSONResponse(info, status_code=200 if info.get("ok") else 502)
+
+
+@app.post("/api/system/app-update")
+async def api_system_app_update():
+    res = start_app_update(BASE_DIR, APP_VERSION)
+    return JSONResponse(res)
+
+
+@app.get("/api/system/app-update/status")
+async def api_system_app_update_status():
+    return JSONResponse(get_app_update_status())
 
 
 @app.post("/api/control")

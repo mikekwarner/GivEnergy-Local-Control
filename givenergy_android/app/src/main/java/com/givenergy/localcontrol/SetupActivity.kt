@@ -1,6 +1,7 @@
 package com.givenergy.localcontrol
 
 import android.os.Bundle
+import android.text.InputType
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
@@ -9,9 +10,13 @@ import androidx.appcompat.app.AppCompatActivity
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
 class SetupActivity : AppCompatActivity() {
@@ -20,9 +25,18 @@ class SetupActivity : AppCompatActivity() {
     private lateinit var edtFunnelUrl: EditText
     private lateinit var edtLanUrl: EditText
     private lateinit var edtApiToken: EditText
+    private lateinit var btnToggleToken: Button
     private lateinit var txtStatus: TextView
     private lateinit var btnSaveConnect: Button
     private lateinit var btnScanQr: Button
+    private var tokenVisible = false
+
+    private val setupHttp = OkHttpClient.Builder()
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
+        .protocols(listOf(Protocol.HTTP_1_1))
+        .build()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -32,6 +46,7 @@ class SetupActivity : AppCompatActivity() {
         edtFunnelUrl = findViewById(R.id.edtFunnelUrl)
         edtLanUrl = findViewById(R.id.edtLanUrl)
         edtApiToken = findViewById(R.id.edtApiToken)
+        btnToggleToken = findViewById(R.id.btnToggleToken)
         txtStatus = findViewById(R.id.txtSetupStatus)
         btnSaveConnect = findViewById(R.id.btnSaveConnect)
         btnScanQr = findViewById(R.id.btnScanQr)
@@ -42,6 +57,19 @@ class SetupActivity : AppCompatActivity() {
         edtLanUrl.setText(existing.lanUrl)
         edtApiToken.setText(existing.apiToken)
 
+        btnToggleToken.setOnClickListener {
+            tokenVisible = !tokenVisible
+            val sel = edtApiToken.selectionEnd.coerceAtLeast(0)
+            val tf = edtApiToken.typeface
+            edtApiToken.inputType = if (tokenVisible) {
+                InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+            } else {
+                InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            }
+            edtApiToken.typeface = tf
+            edtApiToken.setSelection(sel.coerceAtMost(edtApiToken.text?.length ?: 0))
+            btnToggleToken.text = if (tokenVisible) "Hide" else "Show"
+        }
         btnScanQr.setOnClickListener { startQrScan() }
         btnSaveConnect.setOnClickListener { testAndSave() }
     }
@@ -109,17 +137,12 @@ class SetupActivity : AppCompatActivity() {
 
             if (funnelUrl.isNotBlank()) {
                 try {
-                    val conn = (URL("$funnelUrl/api/auth/verify").openConnection() as HttpURLConnection).apply {
-                        requestMethod = "POST"
-                        connectTimeout = 5000
-                        readTimeout = 5000
-                        doOutput = true
-                        setRequestProperty("Content-Type", "application/json")
-                    }
-                    val body = JSONObject().put("token", token).toString().toByteArray(Charsets.UTF_8)
-                    conn.outputStream.use { it.write(body) }
-                    val code = conn.responseCode
-                    conn.disconnect()
+                    val bodyJson = JSONObject().put("token", token).toString()
+                    val req = Request.Builder()
+                        .url("$funnelUrl/api/auth/verify")
+                        .post(bodyJson.toRequestBody("application/json; charset=utf-8".toMediaType()))
+                        .build()
+                    val code = setupHttp.newCall(req).execute().use { it.code }
                     if (code == 200) {
                         funnelOk = true
                     } else if (code == 401) {
@@ -128,19 +151,15 @@ class SetupActivity : AppCompatActivity() {
                         lastError = "Funnel returned HTTP $code."
                     }
                 } catch (e: Exception) {
-                    lastError = "Funnel unreachable: ${e.localizedMessage ?: e.javaClass.simpleName}"
+                    val msg = e.localizedMessage ?: e.javaClass.simpleName
+                    lastError = "Funnel unreachable: $msg. Ensure Tailscale Funnel (tailscale funnel --bg 80) and Funnel ACLs are active on the Pi."
                 }
             }
 
             if (!funnelOk && lanUrl.isNotBlank()) {
                 try {
-                    val conn = (URL("$lanUrl/api/system/stats").openConnection() as HttpURLConnection).apply {
-                        requestMethod = "GET"
-                        connectTimeout = 2000
-                        readTimeout = 2000
-                    }
-                    val code = conn.responseCode
-                    conn.disconnect()
+                    val req = Request.Builder().url("$lanUrl/api/system/stats").get().build()
+                    val code = setupHttp.newCall(req).execute().use { it.code }
                     if (code == 200) {
                         lanOk = true
                     }

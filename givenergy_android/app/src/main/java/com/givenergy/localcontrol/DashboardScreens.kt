@@ -584,7 +584,12 @@ fun EvChargerScreen(
                         Button(
                             onClick = { onControl("evc", "charge_control", mapOf("action" to "start"), "Start EV Charge") },
                             enabled = canStartEvc,
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669)),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF059669),
+                                contentColor = Color.White,
+                                disabledContainerColor = Color(0xFF1E293B),
+                                disabledContentColor = Color(0xFF64748B),
+                            ),
                             modifier = Modifier.weight(1f),
                         ) {
                             Text("Start Charge")
@@ -592,7 +597,12 @@ fun EvChargerScreen(
                         Button(
                             onClick = { onControl("evc", "charge_control", mapOf("action" to "stop"), "Stop EV Charge") },
                             enabled = canStopEvc,
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFFDC2626),
+                                contentColor = Color.White,
+                                disabledContainerColor = Color(0xFF1E293B),
+                                disabledContentColor = Color(0xFF64748B),
+                            ),
                             modifier = Modifier.weight(1f),
                         ) {
                             Text("Stop Charge")
@@ -1264,17 +1274,35 @@ fun CostsScreen(
                     "years" to "Years",
                     "all" to "All",
                 )
-                Row(
+                FlowRow(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     periods.forEach { (key, lbl) ->
                         val active = cs.selectedPeriod == key
                         FilterChip(
                             selected = active,
                             onClick = { onSelectCostPeriod(key) },
-                            label = { Text(lbl, fontSize = 11.sp) },
-                            modifier = Modifier.weight(1f),
+                            label = {
+                                Text(
+                                    lbl,
+                                    fontSize = 11.5.sp,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    color = if (active) Color.White else TextMuted,
+                                )
+                            },
+                            colors = FilterChipDefaults.filterChipColors(
+                                containerColor = Color(0xFF0F172A),
+                                selectedContainerColor = AccentPrimary,
+                            ),
+                            border = FilterChipDefaults.filterChipBorder(
+                                enabled = true,
+                                selected = active,
+                                borderColor = BorderCard,
+                                selectedBorderColor = AccentPrimary,
+                            ),
                         )
                     }
                 }

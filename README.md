@@ -1,4 +1,4 @@
-# GivEnergy Local Control (`v1.4.0`)
+# GivEnergy Local Control (`v1.4.1`)
 
 Local, cloud-free monitoring, control, and historic telemetry server for **GivEnergy Hybrid Inverters, Batteries, and EV Chargers**, designed to run 24/7 on a **Raspberry Pi** (Pi 400, Pi 4, Pi 5, etc.) with a standalone **Windows Deployment Installer**.
 
@@ -25,7 +25,7 @@ Local, cloud-free monitoring, control, and historic telemetry server for **GivEn
 
 ## Quick Start (Windows)
 
-1. Download **`GivEnergy-Local-Control-Installer.exe`** from the [**v1.4.0 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v1.4.0).
+1. Download **`GivEnergy-Local-Control-Installer.exe`** from the [**v1.4.1 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v1.4.1).
 2. Double-click `GivEnergy-Local-Control-Installer.exe` and follow the 6-step wizard:
    - **Step 1:** Prepare a Raspberry Pi OS Lite SD/SSD card using Raspberry Pi Imager (auto-detected if installed).
    - **Step 2:** Auto-detect Raspberry Pis on your local network (also shows currently installed version & available upgrades).
@@ -38,7 +38,7 @@ Local, cloud-free monitoring, control, and historic telemetry server for **GivEn
 
 ## Android Companion App
 
-1. Download **`givenergy-local-control.apk`** from the [**v1.4.0 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v1.4.0) and install it on your Android phone (enable *Install unknown apps* if prompted).
+1. Download **`givenergy-local-control.apk`** from the [**v1.4.1 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v1.4.1) and install it on your Android phone (enable *Install unknown apps* if prompted).
 2. Enable **Tailscale Funnel** during Step 4 of the Windows Installer (or view your pairing details in the dashboard under **⚙ Property Setup → Remote Access**).
 3. Open **GivEnergy Local Control** on your phone and scan the **QR Code** (or paste your Funnel HTTPS URL and Bearer Token) to pair.
 

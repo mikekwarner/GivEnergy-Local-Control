@@ -20,6 +20,7 @@ class GivApiClient {
     private val apiHttp = OkHttpClient.Builder()
         .connectTimeout(8, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
         .pingInterval(20, TimeUnit.SECONDS)
         .build()
 

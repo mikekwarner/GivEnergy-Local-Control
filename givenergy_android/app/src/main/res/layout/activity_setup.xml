@@ -110,17 +110,36 @@
             android:textColor="#CBD5E1"
             android:textSize="12.5sp" />
 
-        <EditText
-            android:id="@+id/edtApiToken"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="46dp"
-            android:background="#111827"
-            android:hint="Paste Bearer Token"
-            android:inputType="textPassword"
-            android:paddingHorizontal="12dp"
-            android:textColor="#F1F5F9"
-            android:textColorHint="#64748B"
-            android:textSize="14sp" />
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <EditText
+                android:id="@+id/edtApiToken"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:background="#111827"
+                android:hint="Paste Bearer Token"
+                android:inputType="textPassword"
+                android:paddingHorizontal="12dp"
+                android:textColor="#F1F5F9"
+                android:textColorHint="#64748B"
+                android:textSize="14sp" />
+
+            <Button
+                android:id="@+id/btnToggleToken"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:layout_marginStart="8dp"
+                android:backgroundTint="#1E293B"
+                android:minWidth="68dp"
+                android:text="Show"
+                android:textColor="#CBD5E1"
+                android:textSize="12.5sp" />
+        </LinearLayout>
 
         <TextView
             android:id="@+id/txtSetupStatus"

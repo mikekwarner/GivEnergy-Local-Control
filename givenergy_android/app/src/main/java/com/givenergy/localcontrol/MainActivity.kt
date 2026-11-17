@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -165,6 +166,15 @@ class MainActivity : ComponentActivity() {
                             label = { Text("History", maxLines = 1, softWrap = false) },
                         )
                         NavigationBarItem(
+                            selected = selectedTab == 6,
+                            onClick = {
+                                selectedTab = 6
+                                loadSolarForecastAsync()
+                            },
+                            icon = { Icon(Icons.Default.WbSunny, contentDescription = "Solar") },
+                            label = { Text("Solar", maxLines = 1, softWrap = false) },
+                        )
+                        NavigationBarItem(
                             selected = selectedTab == 4,
                             onClick = {
                                 selectedTab = 4
@@ -212,6 +222,44 @@ class MainActivity : ComponentActivity() {
                             state = uiState,
                             onSelectRange = { days -> loadHistoryAsync(days) },
                             onReloadHistory = { loadHistoryAsync(uiState.historyRangeDays) },
+                        )
+                        6 -> SolarForecastScreen(
+                            state = uiState,
+                            onRefreshForecast = { loadSolarForecastAsync() },
+                            onSyncOpenMeteo = {
+                                thread {
+                                    val ok = try {
+                                        apiClient.syncSolarForecast()
+                                    } catch (_: Exception) {
+                                        false
+                                    }
+                                    if (ok) loadSolarForecastAsync()
+                                    runOnUiThread {
+                                        scope.launch {
+                                            snackbarHostState.showSnackbar(
+                                                if (ok) "Open-Meteo forecast synced" else "Open-Meteo sync failed"
+                                            )
+                                        }
+                                    }
+                                }
+                            },
+                            onSaveConfig = { payload ->
+                                thread {
+                                    val res = try {
+                                        apiClient.saveSolarForecastConfig(payload)
+                                    } catch (_: Exception) {
+                                        null
+                                    }
+                                    if (res != null) loadSolarForecastAsync()
+                                    runOnUiThread {
+                                        scope.launch {
+                                            snackbarHostState.showSnackbar(
+                                                if (res != null) "Solar forecast saved & synced" else "Failed to save solar forecast"
+                                            )
+                                        }
+                                    }
+                                }
+                            },
                         )
                         4 -> CostsScreen(
                             state = uiState,
@@ -378,6 +426,22 @@ class MainActivity : ComponentActivity() {
         }
         loadHistoryAsync()
         loadCostsAsync()
+        loadSolarForecastAsync()
+    }
+
+    private fun loadSolarForecastAsync() {
+        thread {
+            try {
+                val json = apiClient.fetchSolarForecastData()
+                if (json != null) {
+                    val parsed = PlantJsonParser.parseSolarForecast(json)
+                    runOnUiThread {
+                        uiState = uiState.copy(solarForecast = parsed)
+                    }
+                }
+            } catch (_: Exception) {
+            }
+        }
     }
 
     private fun loadCostsAsync(period: String = uiState.costSummary.selectedPeriod) {

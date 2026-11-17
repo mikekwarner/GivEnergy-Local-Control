@@ -165,6 +165,33 @@ class GivApiClient {
         }
     }
 
+    fun fetchSolarForecastData(pastDays: Int = 2, forecastDays: Int = 7): JSONObject? {
+        if (activeBaseUrl.isBlank()) return null
+        val req = buildAuthorizedRequest("/api/solar-forecast/data?past_days=$pastDays&forecast_days=$forecastDays").get().build()
+        return apiHttp.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) return null
+            val body = resp.body?.string() ?: return null
+            JSONObject(body)
+        }
+    }
+
+    fun saveSolarForecastConfig(payload: JSONObject): JSONObject? {
+        if (activeBaseUrl.isBlank()) return null
+        val body = payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+        val req = buildAuthorizedRequest("/api/solar-forecast/config").post(body).build()
+        return apiHttp.newCall(req).execute().use { resp ->
+            val respBody = resp.body?.string() ?: return null
+            JSONObject(respBody)
+        }
+    }
+
+    fun syncSolarForecast(): Boolean {
+        if (activeBaseUrl.isBlank()) return false
+        val empty = "".toRequestBody("application/json".toMediaType())
+        val req = buildAuthorizedRequest("/api/solar-forecast/sync").post(empty).build()
+        return apiHttp.newCall(req).execute().use { it.isSuccessful }
+    }
+
     fun sendControl(target: String, action: String, params: Map<String, Any>, description: String): Boolean {
         if (activeBaseUrl.isBlank()) return false
         val json = JSONObject()

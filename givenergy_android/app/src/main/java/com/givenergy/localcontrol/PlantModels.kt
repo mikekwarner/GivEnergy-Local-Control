@@ -129,6 +129,60 @@ data class CostSummaryState(
     val dailyCosts: List<DailyCostRecord> = emptyList(),
 )
 
+data class SolarForecastHour(
+    val ts: String,
+    val dateStr: String,
+    val hourStr: String,
+    val gtiWm2: Double,
+    val cloudCoverPct: Double,
+    val tempC: Double,
+    val rawKw: Double,
+    val baselineKw: Double,
+    val forecastKw: Double,
+    val actualKw: Double?,
+    val isPast: Boolean,
+)
+
+data class SolarForecastDay(
+    val dateStr: String,
+    val rawKwh: Double,
+    val baselineKwh: Double,
+    val forecastKwh: Double,
+    val actualKwh: Double?,
+    val cloudCoverAvgPct: Double,
+    val peakForecastKw: Double,
+    val isToday: Boolean,
+    val isFuture: Boolean,
+)
+
+data class SolarForecastState(
+    val loaded: Boolean = false,
+    val configured: Boolean = false,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val capacityKwp: Double = 5.0,
+    val tiltDeg: Double = 35.0,
+    val azimuthDeg: Double = 180.0,
+    val array2Enabled: Boolean = false,
+    val array2CapacityKwp: Double = 0.0,
+    val array2TiltDeg: Double = 35.0,
+    val array2AzimuthDeg: Double = 270.0,
+    val baseEfficiency: Double = 0.85,
+    val lastSyncAt: String = "",
+    val lastSyncError: String = "",
+    val efficiencyPct: Double = 85.0,
+    val confidence: String = "Baseline (awaiting actuals)",
+    val sampleHours: Int = 0,
+    val maeKw: Double? = null,
+    val todayForecastKwh: Double = 0.0,
+    val todayActualKwh: Double = 0.0,
+    val todayRemainingKwh: Double = 0.0,
+    val todayPeakKw: Double = 0.0,
+    val tomorrowForecastKwh: Double? = null,
+    val hourly: List<SolarForecastHour> = emptyList(),
+    val daily: List<SolarForecastDay> = emptyList(),
+)
+
 data class PlantUiState(
     val propertyName: String = "Home",
     val connectionMode: String = "Connecting…",
@@ -144,6 +198,7 @@ data class PlantUiState(
     val historyRangeDays: Int = 1,
     val dailyHistory: List<DailyRecord> = emptyList(),
     val costSummary: CostSummaryState = CostSummaryState(),
+    val solarForecast: SolarForecastState = SolarForecastState(),
     val errorBanner: String? = null,
 )
 
@@ -370,6 +425,80 @@ object PlantJsonParser {
             thirtyDayExportIncomeGbp = tot30.safeDouble("export_income_gbp"),
             thirtyDaySavingsGbp = tot30.safeDouble("savings_gbp"),
             dailyCosts = rows,
+        )
+    }
+
+    fun parseSolarForecast(json: JSONObject): SolarForecastState {
+        val cfg = json.optJSONObject("config") ?: JSONObject()
+        val eff = json.optJSONObject("efficiency") ?: JSONObject()
+        val tsObj = json.optJSONObject("today_summary") ?: JSONObject()
+
+        val hourlyArr = json.optJSONArray("hourly") ?: JSONArray()
+        val hourlyList = mutableListOf<SolarForecastHour>()
+        for (i in 0 until hourlyArr.length()) {
+            val h = hourlyArr.optJSONObject(i) ?: continue
+            hourlyList.add(
+                SolarForecastHour(
+                    ts = h.optString("ts", ""),
+                    dateStr = h.optString("date_str", ""),
+                    hourStr = h.optString("hour_str", ""),
+                    gtiWm2 = h.safeDouble("gti_wm2"),
+                    cloudCoverPct = h.safeDouble("cloud_cover_pct"),
+                    tempC = h.safeDouble("temp_c"),
+                    rawKw = h.safeDouble("raw_kw"),
+                    baselineKw = h.safeDouble("baseline_kw"),
+                    forecastKw = h.safeDouble("forecast_kw"),
+                    actualKw = if (h.isNull("actual_kw")) null else h.safeDouble("actual_kw"),
+                    isPast = h.optBoolean("is_past", false),
+                )
+            )
+        }
+
+        val dailyArr = json.optJSONArray("daily") ?: JSONArray()
+        val dailyList = mutableListOf<SolarForecastDay>()
+        for (i in 0 until dailyArr.length()) {
+            val d = dailyArr.optJSONObject(i) ?: continue
+            dailyList.add(
+                SolarForecastDay(
+                    dateStr = d.optString("date_str", ""),
+                    rawKwh = d.safeDouble("raw_kwh"),
+                    baselineKwh = d.safeDouble("baseline_kwh"),
+                    forecastKwh = d.safeDouble("forecast_kwh"),
+                    actualKwh = if (d.isNull("actual_kwh")) null else d.safeDouble("actual_kwh"),
+                    cloudCoverAvgPct = d.safeDouble("cloud_cover_avg_pct"),
+                    peakForecastKw = d.safeDouble("peak_forecast_kw"),
+                    isToday = d.optBoolean("is_today", false),
+                    isFuture = d.optBoolean("is_future", false),
+                )
+            )
+        }
+
+        return SolarForecastState(
+            loaded = true,
+            configured = json.optBoolean("configured", false),
+            latitude = if (cfg.isNull("latitude")) null else cfg.safeDouble("latitude"),
+            longitude = if (cfg.isNull("longitude")) null else cfg.safeDouble("longitude"),
+            capacityKwp = cfg.safeDouble("capacity_kwp", 5.0),
+            tiltDeg = cfg.safeDouble("tilt_deg", 35.0),
+            azimuthDeg = cfg.safeDouble("azimuth_deg", 180.0),
+            array2Enabled = cfg.optBoolean("array2_enabled", false),
+            array2CapacityKwp = cfg.safeDouble("array2_capacity_kwp", 0.0),
+            array2TiltDeg = cfg.safeDouble("array2_tilt_deg", 35.0),
+            array2AzimuthDeg = cfg.safeDouble("array2_azimuth_deg", 270.0),
+            baseEfficiency = cfg.safeDouble("base_efficiency", 0.85),
+            lastSyncAt = json.optString("last_sync_at", ""),
+            lastSyncError = json.optString("last_sync_error", ""),
+            efficiencyPct = eff.safeDouble("efficiency_pct", 85.0),
+            confidence = eff.optString("confidence", "Baseline (awaiting actuals)"),
+            sampleHours = eff.safeInt("sample_hours", 0),
+            maeKw = if (eff.isNull("mae_kw")) null else eff.safeDouble("mae_kw"),
+            todayForecastKwh = tsObj.safeDouble("forecast_total_kwh"),
+            todayActualKwh = tsObj.safeDouble("actual_so_far_kwh"),
+            todayRemainingKwh = tsObj.safeDouble("remaining_forecast_kwh"),
+            todayPeakKw = tsObj.safeDouble("peak_forecast_kw"),
+            tomorrowForecastKwh = if (tsObj.isNull("tomorrow_forecast_kwh")) null else tsObj.safeDouble("tomorrow_forecast_kwh"),
+            hourly = hourlyList,
+            daily = dailyList,
         )
     }
 }

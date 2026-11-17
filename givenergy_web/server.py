@@ -20,6 +20,7 @@ import threading
 import time
 import zipfile
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,13 @@ from givenergy_web import __version__ as APP_VERSION
 from givenergy_web.config import PropertyConfig, _detect_local_ipv4, load_config, save_config, scan_lan_for_devices
 from givenergy_web.database import HistoricDatabase
 from givenergy_web.poller import AsyncPlantPoller
+from givenergy_web.solar_forecast import (
+    SolarForecastConfig,
+    SolarForecastStore,
+    fetch_open_meteo_forecast,
+    load_solar_forecast_config,
+    save_solar_forecast_config,
+)
 from givenergy_web.updater import check_github_update, get_app_update_status, start_app_update
 from givenergy_web.tariffs import (
     UK_GSP_REGIONS,
@@ -63,10 +71,15 @@ DEFAULT_CONFIG_PATH = Path(
 DEFAULT_TARIFF_CONFIG_PATH = Path(
     os.environ.get("GIVENERGY_TARIFF_CONFIG_PATH", str(DEFAULT_DB_PATH.parent / "tariff_config.json"))
 )
+DEFAULT_SOLAR_FORECAST_CONFIG_PATH = Path(
+    os.environ.get("GIVENERGY_SOLAR_FORECAST_CONFIG_PATH", str(DEFAULT_DB_PATH.parent / "solar_forecast_config.json"))
+)
 DB_FLUSH_INTERVAL_S = float(os.environ.get("GIVENERGY_DB_FLUSH_INTERVAL", "60.0"))
 property_config = load_config(DEFAULT_CONFIG_PATH)
 tariff_config = load_tariff_config(DEFAULT_TARIFF_CONFIG_PATH)
 tariff_cache = TariffRateCache(DEFAULT_DB_PATH)
+solar_forecast_config = load_solar_forecast_config(DEFAULT_SOLAR_FORECAST_CONFIG_PATH)
+solar_forecast_store = SolarForecastStore(DEFAULT_DB_PATH)
 
 
 class WebSocketHub:
@@ -114,7 +127,7 @@ poller = AsyncPlantPoller(
 
 async def _sync_configured_octopus_rates() -> dict[str, Any]:
     """Sync any configured Octopus API tariffs into the local SQLite rate cache."""
-    global tariff_config
+    global tariff_config, solar_forecast_config
     synced: dict[str, Any] = {}
     if tariff_config.import_tariff.mode == "octopus_api" and tariff_config.import_tariff.octopus_product_code:
         res = await asyncio.to_thread(
@@ -158,14 +171,43 @@ async def _octopus_periodic_sync_loop() -> None:
         await asyncio.sleep(6 * 3600)
 
 
+async def _sync_solar_forecast() -> dict[str, Any]:
+    """Fetch Open-Meteo solar irradiance forecast and store in local SQLite cache."""
+    global solar_forecast_config
+    if not solar_forecast_config.is_configured():
+        return {"ok": False, "skipped": True, "reason": "Solar forecast not configured"}
+    try:
+        rows = await asyncio.to_thread(fetch_open_meteo_forecast, solar_forecast_config, 3)
+        count = await asyncio.to_thread(solar_forecast_store.upsert_hourly_rows, rows)
+        solar_forecast_config.last_sync_at = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        solar_forecast_config.last_sync_error = ""
+        save_solar_forecast_config(DEFAULT_SOLAR_FORECAST_CONFIG_PATH, solar_forecast_config)
+        return {"ok": True, "rows_upserted": count, "last_sync_at": solar_forecast_config.last_sync_at}
+    except Exception as exc:
+        solar_forecast_config.last_sync_error = str(exc)
+        save_solar_forecast_config(DEFAULT_SOLAR_FORECAST_CONFIG_PATH, solar_forecast_config)
+        return {"ok": False, "error": str(exc)}
+
+
+async def _solar_forecast_periodic_sync_loop() -> None:
+    while True:
+        try:
+            await _sync_solar_forecast()
+        except Exception:
+            pass
+        await asyncio.sleep(2 * 3600)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await poller.start()
     sync_task = asyncio.create_task(_octopus_periodic_sync_loop())
+    solar_sync_task = asyncio.create_task(_solar_forecast_periodic_sync_loop())
     try:
         yield
     finally:
         sync_task.cancel()
+        solar_sync_task.cancel()
         await poller.stop()
 
 
@@ -527,7 +569,7 @@ async def api_get_tariff_config():
 
 @app.post("/api/tariffs/config")
 async def api_save_tariff_config(req: TariffConfigRequest):
-    global tariff_config
+    global tariff_config, solar_forecast_config
     region = req.region.strip().upper()
     if region not in UK_GSP_REGIONS:
         region = "H"
@@ -912,6 +954,101 @@ async def api_reset_comparison_presets():
     )
 
 
+class SolarForecastConfigRequest(BaseModel):
+    enabled: bool = True
+    latitude: float | None = None
+    longitude: float | None = None
+    capacity_kwp: float = 5.0
+    tilt_deg: float = 35.0
+    azimuth_deg: float = 180.0
+    array2_enabled: bool = False
+    array2_capacity_kwp: float = 0.0
+    array2_tilt_deg: float = 35.0
+    array2_azimuth_deg: float = 270.0
+    base_efficiency: float = 0.85
+    forecast_days: int = 7
+
+
+@app.get("/api/solar-forecast/config")
+async def api_get_solar_forecast_config():
+    data = asdict(solar_forecast_config)
+    data["configured"] = solar_forecast_config.is_configured()
+    return JSONResponse(data)
+
+
+@app.post("/api/solar-forecast/config")
+async def api_save_solar_forecast_config(req: SolarForecastConfigRequest):
+    global solar_forecast_config
+    if req.enabled:
+        if req.latitude is None or not (-90.0 <= req.latitude <= 90.0):
+            raise HTTPException(status_code=400, detail="Latitude must be between -90 and 90.")
+        if req.longitude is None or not (-180.0 <= req.longitude <= 180.0):
+            raise HTTPException(status_code=400, detail="Longitude must be between -180 and 180.")
+        if req.capacity_kwp <= 0 or req.capacity_kwp > 500:
+            raise HTTPException(status_code=400, detail="Array capacity (kWp) must be greater than 0.")
+
+    geom_changed = (
+        solar_forecast_config.latitude != req.latitude
+        or solar_forecast_config.longitude != req.longitude
+        or solar_forecast_config.capacity_kwp != req.capacity_kwp
+        or solar_forecast_config.tilt_deg != req.tilt_deg
+        or solar_forecast_config.azimuth_deg != req.azimuth_deg
+        or solar_forecast_config.array2_enabled != req.array2_enabled
+        or solar_forecast_config.array2_capacity_kwp != req.array2_capacity_kwp
+        or solar_forecast_config.array2_tilt_deg != req.array2_tilt_deg
+        or solar_forecast_config.array2_azimuth_deg != req.array2_azimuth_deg
+    )
+
+    solar_forecast_config = SolarForecastConfig(
+        enabled=bool(req.enabled),
+        latitude=round(float(req.latitude), 6) if req.latitude is not None else None,
+        longitude=round(float(req.longitude), 6) if req.longitude is not None else None,
+        capacity_kwp=max(0.1, float(req.capacity_kwp)),
+        tilt_deg=max(0.0, min(90.0, float(req.tilt_deg))),
+        azimuth_deg=float(req.azimuth_deg) % 360.0,
+        array2_enabled=bool(req.array2_enabled),
+        array2_capacity_kwp=max(0.0, float(req.array2_capacity_kwp)),
+        array2_tilt_deg=max(0.0, min(90.0, float(req.array2_tilt_deg))),
+        array2_azimuth_deg=float(req.array2_azimuth_deg) % 360.0,
+        base_efficiency=max(0.25, min(1.25, float(req.base_efficiency))),
+        forecast_days=max(1, min(14, int(req.forecast_days))),
+        last_sync_at=solar_forecast_config.last_sync_at,
+        last_sync_error="",
+    )
+    save_solar_forecast_config(DEFAULT_SOLAR_FORECAST_CONFIG_PATH, solar_forecast_config)
+    if geom_changed:
+        await asyncio.to_thread(solar_forecast_store.clear_forecasts)
+
+    sync_res = await _sync_solar_forecast()
+    resp = asdict(solar_forecast_config)
+    resp["configured"] = solar_forecast_config.is_configured()
+    resp["sync"] = sync_res
+    return JSONResponse(resp)
+
+
+@app.post("/api/solar-forecast/sync")
+async def api_sync_solar_forecast():
+    res = await _sync_solar_forecast()
+    if not res.get("ok") and not res.get("skipped"):
+        raise HTTPException(status_code=502, detail=res.get("error", "Open-Meteo sync failed"))
+    return JSONResponse(res)
+
+
+@app.get("/api/solar-forecast/data")
+async def api_get_solar_forecast_data(
+    past_days: int = Query(default=2, ge=0, le=7),
+    forecast_days: int = Query(default=7, ge=1, le=14),
+):
+    data = await asyncio.to_thread(
+        solar_forecast_store.get_forecast_and_actuals,
+        solar_forecast_config,
+        past_days,
+        forecast_days,
+    )
+    data["config"] = asdict(solar_forecast_config)
+    return JSONResponse(data)
+
+
 class TokenVerifyRequest(BaseModel):
     token: str = ""
 
@@ -1246,6 +1383,7 @@ async def api_backup_export(
                 if include_config:
                     zf.writestr("property_config.json", json.dumps(asdict(poller.config), indent=2))
                     zf.writestr("tariff_config.json", json.dumps(asdict(tariff_config), indent=2))
+                    zf.writestr("solar_forecast_config.json", json.dumps(asdict(solar_forecast_config), indent=2))
                 if include_history:
                     tmp_db = tmp_root / "givenergy_history.db"
                     db.backup_to_file(tmp_db)
@@ -1273,7 +1411,7 @@ async def api_backup_import(
     restore_history: bool = Query(True),
     preserve_api_token: bool = Query(False),
 ):
-    global tariff_config
+    global tariff_config, solar_forecast_config
     if not restore_config and not restore_history:
         return JSONResponse({"ok": False, "error": "Select configuration and/or historic data to restore."}, status_code=400)
 
@@ -1302,8 +1440,13 @@ async def api_backup_import(
 
         prop_raw: dict[str, Any] | None = None
         tariff_raw: dict[str, Any] | None = None
+        solar_fc_raw: dict[str, Any] | None = None
         if restore_config:
-            if "property_config.json" not in names and "tariff_config.json" not in names:
+            if (
+                "property_config.json" not in names
+                and "tariff_config.json" not in names
+                and "solar_forecast_config.json" not in names
+            ):
                 return JSONResponse(
                     {"ok": False, "error": "Backup archive does not contain configuration files."},
                     status_code=400,
@@ -1324,6 +1467,14 @@ async def api_backup_import(
                     tariff_raw = parsed
                 except Exception as exc:
                     return JSONResponse({"ok": False, "error": f"Invalid tariff_config.json: {exc}"}, status_code=400)
+            if "solar_forecast_config.json" in names:
+                try:
+                    parsed = json.loads(zf.read("solar_forecast_config.json").decode("utf-8"))
+                    if not isinstance(parsed, dict):
+                        raise ValueError("solar_forecast_config.json must be a JSON object")
+                    solar_fc_raw = parsed
+                except Exception as exc:
+                    return JSONResponse({"ok": False, "error": f"Invalid solar_forecast_config.json: {exc}"}, status_code=400)
 
         tmp_db_path: Path | None = None
         if restore_history:
@@ -1367,9 +1518,11 @@ async def api_backup_import(
         if restore_history and tmp_db_path is not None:
             await asyncio.to_thread(db.replace_from_file, tmp_db_path)
             await asyncio.to_thread(tariff_cache._init_table)
+            await asyncio.to_thread(solar_forecast_store._init_schema)
 
         restored_cfg = False
         restored_tariff = False
+        restored_solar_forecast = False
         if restore_config:
             if prop_raw is not None:
                 valid_fields = set(PropertyConfig.__dataclass_fields__.keys())
@@ -1389,12 +1542,19 @@ async def api_backup_import(
                 tariff_config = load_tariff_config(DEFAULT_TARIFF_CONFIG_PATH)
                 restored_tariff = True
 
+            if solar_fc_raw is not None:
+                DEFAULT_SOLAR_FORECAST_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+                DEFAULT_SOLAR_FORECAST_CONFIG_PATH.write_text(json.dumps(solar_fc_raw, indent=2), encoding="utf-8")
+                solar_forecast_config = load_solar_forecast_config(DEFAULT_SOLAR_FORECAST_CONFIG_PATH)
+                restored_solar_forecast = True
+
     stats = db.get_db_stats()
     return JSONResponse(
         {
             "ok": True,
             "restored_config": restored_cfg,
             "restored_tariff": restored_tariff,
+            "restored_solar_forecast": restored_solar_forecast,
             "restored_history": bool(restore_history),
             "stats": stats,
             "manifest": manifest,

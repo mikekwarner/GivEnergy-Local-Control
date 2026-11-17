@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFormLayout,
     QFrame,
     QGraphicsOpacityEffect,
@@ -74,19 +75,25 @@ QWizard, QWizardPage, QWidget {
     font-family: 'Segoe UI', sans-serif;
     font-size: 13px;
 }
+QLabel, QCheckBox, QRadioButton {
+    background-color: transparent;
+}
 QGroupBox {
     background-color: #111827;
     border: 1px solid #1F2A40;
     border-radius: 8px;
-    margin-top: 12px;
-    padding: 12px;
+    margin-top: 4px;
+    padding: 28px 12px 12px 12px;
     font-weight: 700;
     color: #93C5FD;
 }
 QGroupBox::title {
-    subcontrol-origin: margin;
-    left: 10px;
-    padding: 0 6px;
+    subcontrol-origin: padding;
+    subcontrol-position: top left;
+    left: 14px;
+    top: 8px;
+    padding: 0px;
+    background-color: transparent;
 }
 QGroupBox:disabled {
     background-color: #0D1320;
@@ -96,7 +103,7 @@ QGroupBox:disabled {
 QLabel:disabled {
     color: #475569;
 }
-QLineEdit, QComboBox {
+QLineEdit, QComboBox, QDoubleSpinBox {
     background-color: #090D16;
     color: #F8FAFC;
     border: 1px solid #2E3F5E;
@@ -105,12 +112,12 @@ QLineEdit, QComboBox {
     min-height: 22px;
     font-size: 13px;
 }
-QLineEdit:disabled, QComboBox:disabled {
+QLineEdit:disabled, QComboBox:disabled, QDoubleSpinBox:disabled {
     background-color: #0D1320;
     color: #475569;
     border-color: #1E293B;
 }
-QLineEdit:focus, QComboBox:focus {
+QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus {
     border-color: #3B82F6;
 }
 QPushButton {
@@ -340,6 +347,7 @@ class DeployWorker(QThread):
         storage_mode: str = "sd",
         wipe_existing_data: bool = False,
         tariff_config_dict: dict | None = None,
+        solar_forecast_config_dict: dict | None = None,
     ) -> None:
         super().__init__()
         self.host = host
@@ -350,6 +358,7 @@ class DeployWorker(QThread):
         self.storage_mode = storage_mode
         self.wipe_existing_data = wipe_existing_data
         self.tariff_config_dict = tariff_config_dict
+        self.solar_forecast_config_dict = solar_forecast_config_dict
 
     def _run_remote(self, ssh: paramiko.SSHClient, cmd: str, sudo: bool = False) -> tuple[int, str, str]:
         return deploy_to_pi.run_remote(ssh, cmd, sudo=sudo, password=self.password)
@@ -533,19 +542,25 @@ class DeployWorker(QThread):
             if rc != 0:
                 raise RuntimeError("Application deployment returned non-zero exit code.")
 
-            if self.tariff_config_dict:
-                self.log_line.emit("  Uploading pre-configured UK energy tariff settings...")
+            if self.tariff_config_dict or self.solar_forecast_config_dict:
                 ssh_t = paramiko.SSHClient()
                 ssh_t.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                 try:
                     ssh_t.connect(self.host, username=self.user, password=self.password, timeout=8.0)
                     sftp = ssh_t.open_sftp()
-                    remote_tariff_path = f"{deploy_to_pi.REMOTE_ROOT}/data/tariff_config.json"
-                    with sftp.open(remote_tariff_path, "w") as f:
-                        f.write(json.dumps(self.tariff_config_dict, indent=2))
+                    if self.tariff_config_dict:
+                        self.log_line.emit("  Uploading pre-configured UK energy tariff settings...")
+                        remote_tariff_path = f"{deploy_to_pi.REMOTE_ROOT}/data/tariff_config.json"
+                        with sftp.open(remote_tariff_path, "w") as f:
+                            f.write(json.dumps(self.tariff_config_dict, indent=2))
+                    if self.solar_forecast_config_dict:
+                        self.log_line.emit("  Uploading pre-configured Open-Meteo solar forecast settings...")
+                        remote_sf_path = f"{deploy_to_pi.REMOTE_ROOT}/data/solar_forecast_config.json"
+                        with sftp.open(remote_sf_path, "w") as f:
+                            f.write(json.dumps(self.solar_forecast_config_dict, indent=2))
                     sftp.close()
                     self._run_remote(ssh_t, "systemctl restart givenergy-web", sudo=True)
-                    self.log_line.emit("  [OK] Tariff configuration saved and service restarted.")
+                    self.log_line.emit("  [OK] Pre-configured settings saved and service restarted.")
                 finally:
                     ssh_t.close()
 
@@ -911,28 +926,47 @@ def _save_wizard_config(
     remember: bool,
 ) -> None:
     p = _wizard_config_path()
+    existing = _load_wizard_config()
     if not remember:
-        if p.exists():
+        # Clear Pi credentials but preserve optional Tariff & Solar Forecast preferences
+        for k in ("pi_host", "pi_user", "pi_pass_dpapi", "pi_pass", "install_tailscale", "storage_mode"):
+            existing.pop(k, None)
+        if existing:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+        elif p.exists():
             try:
                 p.unlink()
             except Exception:
                 pass
         return
     p.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "pi_host": host.strip(),
-        "pi_user": user.strip(),
-        "pi_pass_dpapi": _dpapi_protect(password),
-        "install_tailscale": bool(install_tailscale),
-        "storage_mode": storage_mode,
-    }
-    p.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    existing.pop("pi_pass", None)
+    existing.update(
+        {
+            "pi_host": host.strip(),
+            "pi_user": user.strip(),
+            "pi_pass_dpapi": _dpapi_protect(password),
+            "install_tailscale": bool(install_tailscale),
+            "storage_mode": storage_mode,
+        }
+    )
+    p.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+
+
+def _update_wizard_config(updates: dict) -> None:
+    p = _wizard_config_path()
+    existing = _load_wizard_config()
+    existing.pop("pi_pass", None)
+    existing.update(updates)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(existing, indent=2), encoding="utf-8")
 
 
 class CredentialsPage(QWizardPage):
     def __init__(self) -> None:
         super().__init__()
-        self.setTitle("Step 4: Pi Credentials & Remote Access")
+        self.setTitle("Step 5: Pi Credentials & Remote Access")
         self.setSubTitle("Confirm the target Raspberry Pi SSH login and optional Tailscale settings.")
         saved = _load_wizard_config()
 
@@ -1185,17 +1219,17 @@ class TariffSetupPage(QWizardPage):
         self.container.setGraphicsEffect(self._opacity_fx)
         cl = QVBoxLayout(self.container)
         cl.setContentsMargins(0, 0, 4, 0)
-        cl.setSpacing(10)
+        cl.setSpacing(6)
 
-        row_h = 32
+        row_h = 28
 
         # Region & Currency (DNO/GSP applies to Octopus Live API regional pricing)
         grp_reg = QGroupBox("Currency && UK Region (Octopus Live API)")
         rl = QGridLayout(grp_reg)
-        rl.setVerticalSpacing(8)
+        rl.setVerticalSpacing(6)
         rl.setHorizontalSpacing(10)
-        rl.setContentsMargins(14, 18, 14, 12)
-        rl.setColumnMinimumWidth(0, 180)
+        rl.setContentsMargins(12, 8, 12, 8)
+        rl.setColumnMinimumWidth(0, 170)
         rl.setColumnStretch(1, 1)
 
         self.lbl_region = QLabel("DNO / GSP Region:")
@@ -1217,6 +1251,7 @@ class TariffSetupPage(QWizardPage):
         self.btn_lookup.clicked.connect(self._lookup_postcode)
         self.lbl_pc_status = QLabel("")
         self.lbl_pc_status.setStyleSheet("color: #94A3B8; font-size: 11px;")
+        self.lbl_pc_status.setVisible(False)
 
         self.cmb_currency = QComboBox()
         self.cmb_currency.setFixedHeight(row_h)
@@ -1224,9 +1259,14 @@ class TariffSetupPage(QWizardPage):
         self.cmb_currency.addItem("€ (c)", ("€", "c"))
         self.cmb_currency.addItem("$ (¢)", ("$", "¢"))
 
+        cur_row = QHBoxLayout()
+        cur_row.setSpacing(8)
+        cur_row.addWidget(self.cmb_region, 1)
+        cur_row.addWidget(QLabel("Currency:"))
+        cur_row.addWidget(self.cmb_currency)
+
         rl.addWidget(self.lbl_region, 0, 0)
-        rl.addWidget(self.cmb_region, 0, 1)
-        rl.addWidget(self.cmb_currency, 0, 2)
+        rl.addLayout(cur_row, 0, 1, 1, 2)
         rl.addWidget(self.lbl_postcode, 1, 0)
         rl.addWidget(self.inp_postcode, 1, 1)
         rl.addWidget(self.btn_lookup, 1, 2)
@@ -1236,10 +1276,10 @@ class TariffSetupPage(QWizardPage):
         # Import Tariff (includes Standing Charge & Dual Rate)
         grp_imp = QGroupBox("Import Tariff (Grid In)")
         il = QGridLayout(grp_imp)
-        il.setVerticalSpacing(8)
+        il.setVerticalSpacing(6)
         il.setHorizontalSpacing(10)
-        il.setContentsMargins(14, 18, 14, 12)
-        il.setColumnMinimumWidth(0, 180)
+        il.setContentsMargins(12, 8, 12, 8)
+        il.setColumnMinimumWidth(0, 170)
         il.setColumnStretch(1, 1)
 
         self.cmb_imp_mode = QComboBox()
@@ -1261,7 +1301,7 @@ class TariffSetupPage(QWizardPage):
         self.inp_imp_rate = QLineEdit("24.50")
         self.inp_imp_rate.setFixedHeight(row_h)
 
-        self.lbl_imp_offpeak = QLabel("Off-Peak Rate & Window:")
+        self.lbl_imp_offpeak = QLabel("Off-Peak Rate && Window:")
         self.wid_imp_offpeak = QWidget()
         self.wid_imp_offpeak.setFixedHeight(row_h)
         opl = QHBoxLayout(self.wid_imp_offpeak)
@@ -1303,10 +1343,10 @@ class TariffSetupPage(QWizardPage):
         # Export Tariff
         grp_exp = QGroupBox("Export Tariff (Solar / Grid Out)")
         el = QGridLayout(grp_exp)
-        el.setVerticalSpacing(8)
+        el.setVerticalSpacing(6)
         el.setHorizontalSpacing(10)
-        el.setContentsMargins(14, 18, 14, 12)
-        el.setColumnMinimumWidth(0, 180)
+        el.setContentsMargins(12, 8, 12, 8)
+        el.setColumnMinimumWidth(0, 170)
         el.setColumnStretch(1, 1)
 
         self.cmb_exp_mode = QComboBox()
@@ -1350,6 +1390,85 @@ class TariffSetupPage(QWizardPage):
         self._on_mode_change("imp")
         self._on_mode_change("exp")
         self._on_toggle_enable(False)
+        self._load_saved_tariff_setup()
+
+    def _load_saved_tariff_setup(self) -> None:
+        saved = _load_wizard_config().get("tariff_setup")
+        if not isinstance(saved, dict):
+            return
+        self._saved_imp_plan_key = str(saved.get("imp_plan_key", ""))
+        self._saved_exp_plan_key = str(saved.get("exp_plan_key", ""))
+        if "region" in saved:
+            idx = self.cmb_region.findData(saved["region"])
+            if idx >= 0:
+                self.cmb_region.setCurrentIndex(idx)
+        if "postcode" in saved:
+            self.inp_postcode.setText(str(saved["postcode"]))
+        if "currency_symbol" in saved:
+            for i in range(self.cmb_currency.count()):
+                d = self.cmb_currency.itemData(i)
+                if d and d[0] == saved["currency_symbol"]:
+                    self.cmb_currency.setCurrentIndex(i)
+                    break
+        if "standing_charge_p" in saved:
+            self.inp_standing.setText(str(saved["standing_charge_p"]))
+        for side, cmb_m, cmb_p, inp_r, inp_d in (
+            ("imp", self.cmb_imp_mode, self.cmb_imp_plan, self.inp_imp_rate, self.inp_imp_desc),
+            ("exp", self.cmb_exp_mode, self.cmb_exp_plan, self.inp_exp_rate, self.inp_exp_desc),
+        ):
+            mode_val = saved.get(f"{side}_mode")
+            if mode_val:
+                idx = cmb_m.findData(mode_val)
+                if idx >= 0:
+                    cmb_m.setCurrentIndex(idx)
+            plan_key = saved.get(f"{side}_plan_key", "")
+            if plan_key:
+                for i in range(cmb_p.count()):
+                    pd = cmb_p.itemData(i)
+                    if isinstance(pd, dict) and (pd.get("id") == plan_key or pd.get("code") == plan_key):
+                        cmb_p.setCurrentIndex(i)
+                        break
+            if f"{side}_rate" in saved:
+                inp_r.setText(str(saved[f"{side}_rate"]))
+            if f"{side}_desc" in saved:
+                inp_d.setText(str(saved[f"{side}_desc"]))
+        if "imp_offpeak_rate" in saved:
+            self.inp_imp_offpeak_rate.setText(str(saved["imp_offpeak_rate"]))
+        if "imp_start" in saved:
+            self.inp_imp_start.setText(str(saved["imp_start"]))
+        if "imp_end" in saved:
+            self.inp_imp_end.setText(str(saved["imp_end"]))
+        self.chk_enable.setChecked(bool(saved.get("enabled", False)))
+
+    def validatePage(self) -> bool:
+        def _plan_key(cmb: QComboBox) -> str:
+            d = cmb.currentData()
+            return str(d.get("id") or d.get("code") or "") if isinstance(d, dict) else ""
+
+        cur, _ = self.cmb_currency.currentData() or ("£", "p")
+        _update_wizard_config(
+            {
+                "tariff_setup": {
+                    "enabled": self.chk_enable.isChecked(),
+                    "region": self.cmb_region.currentData() or "H",
+                    "postcode": self.inp_postcode.text().strip().upper(),
+                    "currency_symbol": cur,
+                    "standing_charge_p": self.inp_standing.text().strip(),
+                    "imp_mode": self.cmb_imp_mode.currentData() or "custom_flat",
+                    "imp_plan_key": _plan_key(self.cmb_imp_plan),
+                    "imp_rate": self.inp_imp_rate.text().strip(),
+                    "imp_offpeak_rate": self.inp_imp_offpeak_rate.text().strip(),
+                    "imp_start": self.inp_imp_start.text().strip(),
+                    "imp_end": self.inp_imp_end.text().strip(),
+                    "imp_desc": self.inp_imp_desc.text().strip(),
+                    "exp_mode": self.cmb_exp_mode.currentData() or "preset",
+                    "exp_plan_key": _plan_key(self.cmb_exp_plan),
+                    "exp_rate": self.inp_exp_rate.text().strip(),
+                    "exp_desc": self.inp_exp_desc.text().strip(),
+                }
+            }
+        )
+        return super().validatePage()
 
     def _on_toggle_enable(self, checked: bool) -> None:
         self.container.setEnabled(checked)
@@ -1504,9 +1623,11 @@ class TariffSetupPage(QWizardPage):
         pc = self.inp_postcode.text().strip()
         if not pc:
             self.lbl_pc_status.setText("Enter a UK postcode first.")
+            self.lbl_pc_status.setVisible(True)
             return
         self.btn_lookup.setEnabled(False)
         self.lbl_pc_status.setText("Looking up DNO region…")
+        self.lbl_pc_status.setVisible(True)
         self._pc_worker = _PostcodeWorker(pc)
         self._pc_worker.resolved.connect(self._on_postcode_resolved)
         self._pc_worker.failed.connect(self._on_postcode_failed)
@@ -1621,10 +1742,346 @@ class TariffSetupPage(QWizardPage):
         }
 
 
+class SolarForecastSetupPage(QWizardPage):
+    _AZIMUTH_PRESETS = [
+        ("South (180°)", 180.0),
+        ("South-East (135°)", 135.0),
+        ("South-West (225°)", 225.0),
+        ("East (90°)", 90.0),
+        ("West (270°)", 270.0),
+        ("North-East (45°)", 45.0),
+        ("North-West (315°)", 315.0),
+        ("North (0°)", 0.0),
+        ("Custom", -1.0),
+    ]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setTitle("Step 4: Solar Forecasting via Open-Meteo (Optional)")
+        self.setSubTitle(
+            "Pre-configure your solar array location & roof geometry for Open-Meteo forecasting, "
+            "or leave unchecked to configure later in the web interface."
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+
+        self.chk_enable = QCheckBox("Configure / overwrite Solar Forecasting (Open-Meteo) settings on this Pi")
+        self.chk_enable.setChecked(False)
+        self.chk_enable.toggled.connect(self._on_toggle_enable)
+        layout.addWidget(self.chk_enable)
+
+        self.container = QWidget()
+        self.container.setEnabled(False)
+        self._opacity_fx = QGraphicsOpacityEffect(self.container)
+        self._opacity_fx.setOpacity(0.38)
+        self.container.setGraphicsEffect(self._opacity_fx)
+        cl = QVBoxLayout(self.container)
+        cl.setContentsMargins(0, 0, 4, 0)
+        cl.setSpacing(10)
+
+        # Instructions Box
+        grp_help = QGroupBox("How to Determine Your Solar Parameters")
+        hl = QVBoxLayout(grp_help)
+        hl.setContentsMargins(14, 18, 14, 12)
+        lbl_help = QLabel(
+            "• <b>Latitude &amp; Longitude:</b> Open <b>Google Maps</b>, right-click on your house/roof, and click the "
+            "coordinates at the top of the menu to copy them (e.g. <code>51.5074, -0.1278</code>). "
+            "You can paste both directly into Latitude to auto-fill Longitude.<br>"
+            "• <b>Array Capacity (kWp):</b> Total rated DC power of your panels "
+            "(e.g. 10 × 400W panels = <code>4.0 kWp</code>). Check your MCS certificate or inverter paperwork.<br>"
+            "• <b>Roof Tilt (°):</b> Panel angle from horizontal (<code>0°</code> = flat, <code>90°</code> = vertical). "
+            "Typical UK pitched roofs are <code>30°–40°</code> (default <code>35°</code>).<br>"
+            "• <b>Azimuth (°):</b> Compass direction the panels face (<code>180°</code> = Due South, "
+            "<code>90°</code> = East, <code>270°</code> = West, <code>0°</code> = North).<br>"
+            "<i>Tip: As actual solar data is recorded, an adaptive efficiency factor automatically calibrates future forecasts.</i>"
+        )
+        lbl_help.setWordWrap(True)
+        lbl_help.setTextFormat(Qt.RichText)
+        lbl_help.setStyleSheet("color: #CBD5E1; font-size: 12px; line-height: 1.45;")
+        hl.addWidget(lbl_help)
+        cl.addWidget(grp_help)
+
+        row_h = 32
+
+        # Location & Primary Array
+        grp_loc = QGroupBox("Location && Primary Solar Array")
+        gl = QGridLayout(grp_loc)
+        gl.setVerticalSpacing(8)
+        gl.setHorizontalSpacing(10)
+        gl.setContentsMargins(14, 18, 14, 12)
+        gl.setColumnMinimumWidth(0, 180)
+        gl.setColumnStretch(1, 1)
+
+        self.edt_lat = QLineEdit()
+        self.edt_lat.setFixedHeight(row_h)
+        self.edt_lat.setPlaceholderText("e.g. 51.5074 (or paste 'lat, lon')")
+        self.edt_lat.textChanged.connect(self._on_lat_text_changed)
+
+        self.edt_lon = QLineEdit()
+        self.edt_lon.setFixedHeight(row_h)
+        self.edt_lon.setPlaceholderText("e.g. -0.1278")
+
+        self.spn_cap = QDoubleSpinBox()
+        self.spn_cap.setFixedHeight(row_h)
+        self.spn_cap.setRange(0.1, 200.0)
+        self.spn_cap.setDecimals(2)
+        self.spn_cap.setSingleStep(0.5)
+        self.spn_cap.setSuffix(" kWp")
+        self.spn_cap.setValue(5.0)
+
+        self.spn_tilt = QDoubleSpinBox()
+        self.spn_tilt.setFixedHeight(row_h)
+        self.spn_tilt.setRange(0.0, 90.0)
+        self.spn_tilt.setDecimals(1)
+        self.spn_tilt.setSuffix(" °")
+        self.spn_tilt.setValue(35.0)
+
+        az_row = QHBoxLayout()
+        az_row.setSpacing(8)
+        self.cmb_az = QComboBox()
+        self.cmb_az.setFixedHeight(row_h)
+        for label, deg in self._AZIMUTH_PRESETS:
+            self.cmb_az.addItem(label, deg)
+        self.spn_az = QDoubleSpinBox()
+        self.spn_az.setFixedHeight(row_h)
+        self.spn_az.setRange(0.0, 360.0)
+        self.spn_az.setDecimals(1)
+        self.spn_az.setSuffix(" °")
+        self.spn_az.setValue(180.0)
+        self.cmb_az.currentIndexChanged.connect(lambda: self._sync_az_from_combo(self.cmb_az, self.spn_az))
+        self.spn_az.valueChanged.connect(lambda v: self._sync_combo_from_az(self.cmb_az, v))
+        az_row.addWidget(self.cmb_az, 1)
+        az_row.addWidget(self.spn_az)
+
+        gl.addWidget(QLabel("Latitude / Longitude:"), 0, 0)
+        coord_row = QHBoxLayout()
+        coord_row.setSpacing(8)
+        coord_row.addWidget(self.edt_lat, 1)
+        coord_row.addWidget(self.edt_lon, 1)
+        gl.addLayout(coord_row, 0, 1)
+
+        gl.addWidget(QLabel("Array Peak Capacity:"), 1, 0)
+        gl.addWidget(self.spn_cap, 1, 1)
+        gl.addWidget(QLabel("Roof Tilt Angle:"), 2, 0)
+        gl.addWidget(self.spn_tilt, 2, 1)
+        gl.addWidget(QLabel("Panel Azimuth (Compass):"), 3, 0)
+        gl.addLayout(az_row, 3, 1)
+        cl.addWidget(grp_loc)
+
+        # Optional Split Roof (String 2)
+        grp_a2 = QGroupBox("Optional Second Roof / Split String (e.g. East + West)")
+        a2l = QGridLayout(grp_a2)
+        a2l.setVerticalSpacing(8)
+        a2l.setHorizontalSpacing(10)
+        a2l.setContentsMargins(14, 18, 14, 12)
+        a2l.setColumnMinimumWidth(0, 180)
+        a2l.setColumnStretch(1, 1)
+
+        self.chk_array2 = QCheckBox("Enable Second Array / String 2")
+        self.chk_array2.setChecked(False)
+        self.chk_array2.toggled.connect(self._on_toggle_array2)
+        a2l.addWidget(self.chk_array2, 0, 0, 1, 2)
+
+        self.spn_cap2 = QDoubleSpinBox()
+        self.spn_cap2.setFixedHeight(row_h)
+        self.spn_cap2.setRange(0.1, 200.0)
+        self.spn_cap2.setDecimals(2)
+        self.spn_cap2.setSingleStep(0.5)
+        self.spn_cap2.setSuffix(" kWp")
+        self.spn_cap2.setValue(2.0)
+
+        self.spn_tilt2 = QDoubleSpinBox()
+        self.spn_tilt2.setFixedHeight(row_h)
+        self.spn_tilt2.setRange(0.0, 90.0)
+        self.spn_tilt2.setDecimals(1)
+        self.spn_tilt2.setSuffix(" °")
+        self.spn_tilt2.setValue(35.0)
+
+        az2_row = QHBoxLayout()
+        az2_row.setSpacing(8)
+        self.cmb_az2 = QComboBox()
+        self.cmb_az2.setFixedHeight(row_h)
+        for label, deg in self._AZIMUTH_PRESETS:
+            self.cmb_az2.addItem(label, deg)
+        idx_w = self.cmb_az2.findData(270.0)
+        if idx_w >= 0:
+            self.cmb_az2.setCurrentIndex(idx_w)
+        self.spn_az2 = QDoubleSpinBox()
+        self.spn_az2.setFixedHeight(row_h)
+        self.spn_az2.setRange(0.0, 360.0)
+        self.spn_az2.setDecimals(1)
+        self.spn_az2.setSuffix(" °")
+        self.spn_az2.setValue(270.0)
+        self.cmb_az2.currentIndexChanged.connect(lambda: self._sync_az_from_combo(self.cmb_az2, self.spn_az2))
+        self.spn_az2.valueChanged.connect(lambda v: self._sync_combo_from_az(self.cmb_az2, v))
+        az2_row.addWidget(self.cmb_az2, 1)
+        az2_row.addWidget(self.spn_az2)
+
+        a2l.addWidget(QLabel("String 2 Capacity:"), 1, 0)
+        a2l.addWidget(self.spn_cap2, 1, 1)
+        a2l.addWidget(QLabel("String 2 Tilt Angle:"), 2, 0)
+        a2l.addWidget(self.spn_tilt2, 2, 1)
+        a2l.addWidget(QLabel("String 2 Azimuth:"), 3, 0)
+        a2l.addLayout(az2_row, 3, 1)
+        self._on_toggle_array2(False)
+        cl.addWidget(grp_a2)
+        cl.addStretch()
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setWidget(self.container)
+        layout.addWidget(scroll, 1)
+        self._load_saved_solar_setup()
+
+    def _load_saved_solar_setup(self) -> None:
+        saved = _load_wizard_config().get("solar_forecast_setup")
+        if not isinstance(saved, dict):
+            return
+        if "latitude" in saved:
+            self.edt_lat.setText(str(saved["latitude"]))
+        if "longitude" in saved:
+            self.edt_lon.setText(str(saved["longitude"]))
+        if "capacity_kwp" in saved:
+            self.spn_cap.setValue(float(saved["capacity_kwp"]))
+        if "tilt_deg" in saved:
+            self.spn_tilt.setValue(float(saved["tilt_deg"]))
+        if "azimuth_deg" in saved:
+            self.spn_az.setValue(float(saved["azimuth_deg"]))
+        self.chk_array2.setChecked(bool(saved.get("array2_enabled", False)))
+        if "array2_capacity_kwp" in saved and float(saved["array2_capacity_kwp"]) > 0:
+            self.spn_cap2.setValue(float(saved["array2_capacity_kwp"]))
+        if "array2_tilt_deg" in saved:
+            self.spn_tilt2.setValue(float(saved["array2_tilt_deg"]))
+        if "array2_azimuth_deg" in saved:
+            self.spn_az2.setValue(float(saved["array2_azimuth_deg"]))
+        self.chk_enable.setChecked(bool(saved.get("enabled", False)))
+
+    def _on_toggle_enable(self, checked: bool) -> None:
+        self.container.setEnabled(checked)
+        self._opacity_fx.setOpacity(1.0 if checked else 0.38)
+
+    def _on_toggle_array2(self, checked: bool) -> None:
+        for w in (self.spn_cap2, self.spn_tilt2, self.cmb_az2, self.spn_az2):
+            w.setEnabled(checked)
+
+    def _on_lat_text_changed(self, text: str) -> None:
+        if "," in text:
+            parts = [p.strip() for p in text.split(",", 1)]
+            if len(parts) == 2 and parts[0] and parts[1]:
+                try:
+                    float(parts[0])
+                    float(parts[1])
+                    self.edt_lat.blockSignals(True)
+                    self.edt_lat.setText(parts[0])
+                    self.edt_lat.blockSignals(False)
+                    self.edt_lon.setText(parts[1])
+                except ValueError:
+                    pass
+
+    @staticmethod
+    def _sync_az_from_combo(cmb: QComboBox, spn: QDoubleSpinBox) -> None:
+        deg = float(cmb.currentData())
+        if deg >= 0:
+            spn.blockSignals(True)
+            spn.setValue(deg)
+            spn.blockSignals(False)
+
+    @staticmethod
+    def _sync_combo_from_az(cmb: QComboBox, val: float) -> None:
+        idx = cmb.findData(round(val, 1))
+        cmb.blockSignals(True)
+        if idx >= 0:
+            cmb.setCurrentIndex(idx)
+        else:
+            custom_idx = cmb.findData(-1.0)
+            if custom_idx >= 0:
+                cmb.setCurrentIndex(custom_idx)
+        cmb.blockSignals(False)
+
+    def validatePage(self) -> bool:
+        if not self.chk_enable.isChecked():
+            _update_wizard_config(
+                {
+                    "solar_forecast_setup": {
+                        "enabled": False,
+                        "latitude": self.edt_lat.text().strip(),
+                        "longitude": self.edt_lon.text().strip(),
+                        "capacity_kwp": round(self.spn_cap.value(), 2),
+                        "tilt_deg": round(self.spn_tilt.value(), 1),
+                        "azimuth_deg": round(self.spn_az.value(), 1),
+                        "array2_enabled": self.chk_array2.isChecked(),
+                        "array2_capacity_kwp": round(self.spn_cap2.value(), 2),
+                        "array2_tilt_deg": round(self.spn_tilt2.value(), 1),
+                        "array2_azimuth_deg": round(self.spn_az2.value(), 1),
+                    }
+                }
+            )
+            return True
+        try:
+            lat = float(self.edt_lat.text().strip())
+            lon = float(self.edt_lon.text().strip())
+        except ValueError:
+            QMessageBox.warning(
+                self,
+                "Invalid Coordinates",
+                "Please enter valid numeric Latitude and Longitude values (e.g. 51.5074 and -0.1278), "
+                "or uncheck Solar Forecasting to configure it later in the web interface.",
+            )
+            return False
+        if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0):
+            QMessageBox.warning(
+                self,
+                "Coordinates Out of Range",
+                "Latitude must be between -90 and 90, and Longitude must be between -180 and 180.",
+            )
+            return False
+        _update_wizard_config(
+            {
+                "solar_forecast_setup": {
+                    "enabled": True,
+                    "latitude": round(lat, 6),
+                    "longitude": round(lon, 6),
+                    "capacity_kwp": round(self.spn_cap.value(), 2),
+                    "tilt_deg": round(self.spn_tilt.value(), 1),
+                    "azimuth_deg": round(self.spn_az.value(), 1),
+                    "array2_enabled": self.chk_array2.isChecked(),
+                    "array2_capacity_kwp": round(self.spn_cap2.value(), 2),
+                    "array2_tilt_deg": round(self.spn_tilt2.value(), 1),
+                    "array2_azimuth_deg": round(self.spn_az2.value(), 1),
+                }
+            }
+        )
+        return True
+
+    def build_solar_forecast_config(self) -> dict | None:
+        if not self.chk_enable.isChecked():
+            return None
+        lat = float(self.edt_lat.text().strip())
+        lon = float(self.edt_lon.text().strip())
+        return {
+            "enabled": True,
+            "latitude": round(lat, 6),
+            "longitude": round(lon, 6),
+            "capacity_kwp": round(self.spn_cap.value(), 2),
+            "tilt_deg": round(self.spn_tilt.value(), 1),
+            "azimuth_deg": round(self.spn_az.value(), 1),
+            "array2_enabled": self.chk_array2.isChecked(),
+            "array2_capacity_kwp": round(self.spn_cap2.value(), 2) if self.chk_array2.isChecked() else 0.0,
+            "array2_tilt_deg": round(self.spn_tilt2.value(), 1),
+            "array2_azimuth_deg": round(self.spn_az2.value(), 1),
+            "base_efficiency": 0.85,
+            "forecast_days": 7,
+            "last_sync_at": "",
+            "last_sync_error": "",
+        }
+
+
 class DeployProgressPage(QWizardPage):
     def __init__(self) -> None:
         super().__init__()
-        self.setTitle("Step 5: Provisioning & Installing GivEnergy Web Service")
+        self.setTitle("Step 6: Provisioning & Installing GivEnergy Web Service")
         self.setSubTitle("Configuring SD-safe RAM logging, Python environment, Tailscale, and systemd service.")
         self._worker: DeployWorker | None = None
         self._done_ok = False
@@ -1666,10 +2123,12 @@ class DeployProgressPage(QWizardPage):
         if self._worker and self._worker.isRunning():
             return
         self.btn_retry.setVisible(False)
-        cred_page = self.wizard().page(3)
-        storage_mode = cred_page.cmb_storage.currentData() if hasattr(cred_page, "cmb_storage") else "sd"
         tariff_page = self.wizard().page(2)
         tariff_cfg = tariff_page.build_tariff_config() if hasattr(tariff_page, "build_tariff_config") else None
+        solar_page = self.wizard().page(3)
+        solar_cfg = solar_page.build_solar_forecast_config() if hasattr(solar_page, "build_solar_forecast_config") else None
+        cred_page = self.wizard().page(4)
+        storage_mode = cred_page.cmb_storage.currentData() if hasattr(cred_page, "cmb_storage") else "sd"
         self._worker = DeployWorker(
             host=str(self.field("pi_host")).strip(),
             user=str(self.field("pi_user")).strip(),
@@ -1679,6 +2138,7 @@ class DeployProgressPage(QWizardPage):
             storage_mode=storage_mode,
             wipe_existing_data=bool(self.field("wipe_data")),
             tariff_config_dict=tariff_cfg,
+            solar_forecast_config_dict=solar_cfg,
         )
         self._worker.log_line.connect(self.log_box.append)
         self._worker.progress.connect(self.pbar.setValue)
@@ -1793,6 +2253,7 @@ class GivEnergyDeploymentWizard(QWizard):
         self.addPage(OSPrepPage())
         self.addPage(DiscoverPiPage())
         self.addPage(TariffSetupPage())
+        self.addPage(SolarForecastSetupPage())
         self.addPage(CredentialsPage())
         self.addPage(DeployProgressPage())
         self.addPage(FinishPage())

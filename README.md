@@ -1,4 +1,4 @@
-# GivEnergy Local Control (`v1.5.0`)
+# GivEnergy Local Control (`v1.6.0`)
 
 Local, cloud-free monitoring, control, and historic telemetry server for **GivEnergy Hybrid Inverters, Batteries, and EV Chargers**, designed to run 24/7 on a **Raspberry Pi** (Pi 400, Pi 4, Pi 5, etc.) with a standalone **Windows Deployment Installer**.
 
@@ -15,31 +15,33 @@ Local, cloud-free monitoring, control, and historic telemetry server for **GivEn
 - **Battery & BMS + Grid Voltage Views** — Per-cell voltage monitoring, BMS status, and grid voltage history charts.
 - **Auto-Discovery & Property Setup** — Automatically scans your local `/24` subnet for GivEnergy Inverters and EV Chargers on first setup and saves configuration to `property_config.json`.
 - **UK Energy Cost, Tariff Monitoring & What-If Comparison** — 3-tier tariff engine supporting Custom Flat/Dual/ToU rates, UK Supplier Presets (E.ON, EDF, British Gas, OVO, Octopus), and Octopus Energy's live half-hourly API with automatic regional Ofgem Price Cap comparison, a **Days / Weeks / Months / Years / All-Time** Cost & Export Ledger, and a **Tariff Comparison (What-If Calculator)** to compare UK presets and saved custom off-peak quotes against your active tariff.
-- **System Backup & Restore** — Portable `.zip` export and validated import of property/tariff configuration and the historic SQLite database for backups or Raspberry Pi hardware replacement.
+- **Solar Forecasting (Open-Meteo + Adaptive Efficiency Calibration)** — Hourly & daily solar PV yield forecasts using Open-Meteo Global Tilted Irradiance (`global_tilted_irradiance`), supporting primary and optional second split-roof arrays, Google Maps coordinate paste splitting, and an adaptive site efficiency factor that learns from actual PV telemetry to calibrate future trends. Available in the **☀ Solar Forecast** web tab and the **Solar** tab in the Android app.
+- **System Backup & Restore** — Portable `.zip` export and validated import of property, tariff, and solar forecast configurations plus the historic SQLite database for backups or Raspberry Pi hardware replacement.
 - **Raspberry Pi System & Maintenance Tab** — Displays detected Pi hardware model, CPU temperature, RAM/storage usage, one-click **GitHub App Updates** (with live progress and automatic service restart), OS software updates, reboot-required detection, and Restart / Shut Down actions.
 - **Optional Tailscale Remote Access & Funnel** — Guided Tailscale + Tailscale Funnel HTTPS setup with automatic Bearer Token authentication and QR code pairing for secure off-site and Android app access without router port-forwarding or running a VPN client on your phone.
-- **Android Companion App (`givenergy-local-control.apk`)** — Native Jetpack Compose Android app with live power flow, battery/BMS & grid voltage details, interactive historical time-series graphs, UK energy cost & tariff ledger, one-scan QR pairing, and in-app GitHub release self-updates.
+- **Android Companion App (`givenergy-local-control.apk`)** — Native Jetpack Compose Android app with live power flow, battery/BMS & grid voltage details, interactive historical time-series graphs, Open-Meteo solar forecast trends, UK energy cost & tariff ledger, one-scan QR pairing, and in-app GitHub release self-updates.
 - **Standalone Windows Installer (`GivEnergy-Local-Control-Installer.exe`)** — Full Pi software installation and configuration from the deployment PC with DPAPI-encrypted credential persistence.
 
 ---
 
 ## Quick Start (Windows)
 
-1. Download **`GivEnergy-Local-Control-Installer.exe`** from the [**v1.5.0 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v1.5.0).
-2. Double-click `GivEnergy-Local-Control-Installer.exe` and follow the 6-step wizard:
+1. Download **`GivEnergy-Local-Control-Installer.exe`** from the [**v1.6.0 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v1.6.0).
+2. Double-click `GivEnergy-Local-Control-Installer.exe` and follow the 7-step wizard:
    - **Step 1:** Prepare a Raspberry Pi OS Lite SD/SSD card using Raspberry Pi Imager (auto-detected if installed).
    - **Step 2:** Auto-detect Raspberry Pis on your local network (also shows currently installed version & available upgrades).
-   - **Step 3:** *(Optional)* Pre-configure your UK Import/Export energy tariff (Custom Flat/Dual, UK Supplier Preset, or Octopus Energy live API).
-   - **Step 4:** Enter SSH credentials (optionally remembered securely on your PC via Windows DPAPI), choose Tailscale remote access, select MicroSD vs. NVMe/SSD optimization, and optionally wipe previous data/config.
-   - **Step 5:** Automated provisioning, Python environment setup, Tailscale login link, and `systemd` service deployment.
-   - **Step 6:** Open the dashboard directly to **⚙ Property Setup** to verify auto-discovered Inverter and EV Charger IPs.
+   - **Step 3:** *(Optional)* Pre-configure your UK Import/Export energy tariff (Custom Flat/Dual, UK Supplier Preset, or Octopus Energy live API) — remembered between setups.
+   - **Step 4:** *(Optional)* Pre-configure Open-Meteo Solar Forecasting parameters (location lat/lon, array kWp defaulting to `5.0 kWp`, tilt, azimuth, and optional split-roof String 2) — remembered between setups, or configurable later in the web UI.
+   - **Step 5:** Enter SSH credentials (optionally remembered securely on your PC via Windows DPAPI), choose Tailscale remote access, select MicroSD vs. NVMe/SSD optimization, and optionally wipe previous data/config.
+   - **Step 6:** Automated provisioning, Python environment setup, Tailscale login link, and `systemd` service deployment.
+   - **Step 7:** Open the dashboard directly to **⚙ Property Setup** to verify auto-discovered Inverter and EV Charger IPs.
 
 ---
 
 ## Android Companion App
 
-1. Download **`givenergy-local-control.apk`** from the [**v1.5.0 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v1.5.0) and install it on your Android phone (enable *Install unknown apps* if prompted).
-2. Enable **Tailscale Funnel** during Step 4 of the Windows Installer (or view your pairing details in the dashboard under **⚙ Property Setup → Remote Access**).
+1. Download **`givenergy-local-control.apk`** from the [**v1.6.0 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v1.6.0) and install it on your Android phone (enable *Install unknown apps* if prompted).
+2. Enable **Tailscale Funnel** during Step 5 of the Windows Installer (or view your pairing details in the dashboard under **⚙ Property Setup → Remote Access**).
 3. Open **GivEnergy Local Control** on your phone and scan the **QR Code** (or paste your Funnel HTTPS URL and Bearer Token) to pair.
 
 <img src="docs/android-preview.png" width="300" alt="GivEnergy Local Control Android App" />
@@ -50,16 +52,16 @@ Local, cloud-free monitoring, control, and historic telemetry server for **GivEn
 
 ### Windows Raspberry Pi Deployment Installer
 
+Run the automated Windows setup script (`setup_dev_env.bat` / `setup_dev_env.ps1`) to create `.venv`, install `requirements.txt`, check Java/JDK & `adb`, and generate `givenergy_android/local.properties`:
+
 ```powershell
-# 1. Create virtual environment & install dependencies
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+# 1. Automated Windows environment setup (add -Build to also compile EXE + APK)
+.\setup_dev_env.bat
 
 # 2. Launch the Deployment Wizard from source
 .\deploy_wizard.bat
 
-# 3. Build the standalone Windows executable (dist\GivEnergy-Local-Control-Installer.exe)
+# 3. Build the standalone Windows executable + Android APK (dist\)
 .\build_wizard_exe.bat
 ```
 
@@ -95,4 +97,5 @@ gradle assembleDebug
 - `deploy_to_pi.py` & `setup_pi.py` — Automated Raspberry Pi SSH/SFTP provisioning & systemd deployment
 - `givenergy_web/` — FastAPI + WebSocket backend, async Modbus poller, SQLite WAL database, and web UI (`static/index.html`)
 - `givenergy_android/` — Native Kotlin / Jetpack Compose Android companion app (`givenergy-local-control.apk`)
-- `build_wizard_exe.bat` — PyInstaller build script for `GivEnergy-Local-Control-Installer.exe`
+- `setup_dev_env.bat` / `setup_dev_env.ps1` — Automated Windows developer environment setup script
+- `build_wizard_exe.bat` — PyInstaller + Gradle build script for `GivEnergy-Local-Control-Installer.exe` and `givenergy-local-control.apk`

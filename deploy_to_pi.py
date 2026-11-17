@@ -25,6 +25,7 @@ FILES_TO_DEPLOY = [
     ("givenergy_web/models.py", "givenergy_web/models.py"),
     ("givenergy_web/poller.py", "givenergy_web/poller.py"),
     ("givenergy_web/server.py", "givenergy_web/server.py"),
+    ("givenergy_web/solar_forecast.py", "givenergy_web/solar_forecast.py"),
     ("givenergy_web/tariffs.py", "givenergy_web/tariffs.py"),
     ("givenergy_web/updater.py", "givenergy_web/updater.py"),
     ("givenergy_web/static/index.html", "givenergy_web/static/index.html"),

@@ -805,6 +805,7 @@
       <nav class="tabs-bar">
         <button class="tab-btn active" onclick="switchTab('live', this)">⚡ Live Power Flow &amp; Timeline</button>
         <button class="tab-btn" onclick="switchTab('history', this)">📈 Historic Analytics &amp; Daily Ledger</button>
+        <button class="tab-btn" id="tab-btn-forecast" onclick="switchTab('forecast', this)">☀ Solar Forecast</button>
         <button class="tab-btn" id="tab-btn-costs" onclick="switchTab('costs', this)">💷 Costs &amp; Tariffs</button>
         <button class="tab-btn" id="tab-btn-bms" onclick="switchTab('bms', this)">🔋 Battery &amp; BMS</button>
         <button class="tab-btn" id="tab-btn-evc" onclick="switchTab('evc', this)">🚗 EV Charger</button>
@@ -942,6 +943,209 @@
               </thead>
               <tbody id="daily-ledger-tbody">
                 <tr><td colspan="14" style="text-align:center; color:var(--text-muted);">Loading daily energy ledger…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2A: SOLAR FORECAST (OPEN-METEO) -->
+      <section class="tab-pane" id="tab-forecast">
+        <div id="fc-unconfigured-banner" class="panel" style="display:none; border-color:rgba(245,158,11,0.45); background:rgba(245,158,11,0.07); margin-bottom:14px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+            <div>
+              <div class="panel-title" style="color:#FBBF24;">☀ Solar Forecasting Not Yet Configured</div>
+              <div class="panel-sub">Enter your location coordinates and solar array geometry below to start Open-Meteo forecasting and adaptive efficiency calibration.</div>
+            </div>
+            <button class="btn primary" onclick="toggleForecastConfigPanel(true)">⚙ Configure Parameters</button>
+          </div>
+        </div>
+
+        <div id="fc-config-panel" class="panel" style="display:none; margin-bottom:14px;">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title">☀ Solar Forecast Parameters (Open-Meteo)</div>
+              <div class="panel-sub">Saved to `solar_forecast_config.json` — automatically calibrated over time as actual PV telemetry is recorded</div>
+            </div>
+            <button class="btn" onclick="toggleForecastConfigPanel(false)">✕ Close</button>
+          </div>
+
+          <div style="background:rgba(15,23,42,0.7); border:1px solid var(--border); border-radius:8px; padding:10px 14px; margin-bottom:14px; font-size:12px; color:#CBD5E1; line-height:1.55;">
+            <b>How to determine your parameters:</b><br>
+            • <b>Latitude &amp; Longitude:</b> Open <b>Google Maps</b>, right-click on your house/roof, and click the coordinates at the top of the menu to copy them (e.g. <code>51.5074, -0.1278</code>). Paste directly into Latitude to auto-fill Longitude.<br>
+            • <b>Array Capacity (kWp):</b> Total rated DC power of your panels (e.g. 10 × 400W = <code>4.0 kWp</code>). Check your MCS certificate or inverter paperwork.<br>
+            • <b>Roof Tilt (°):</b> Angle from horizontal (<code>0°</code> = flat, <code>90°</code> = vertical). Typical UK pitched roofs are <code>30°–40°</code> (default <code>35°</code>).<br>
+            • <b>Azimuth (°):</b> Compass direction panels face (<code>180°</code> = Due South, <code>90°</code> = East, <code>270°</code> = West, <code>0°</code> = North).
+          </div>
+
+          <div class="two-col">
+            <div class="ctrl-group">
+              <div class="ctrl-label"><span>Location &amp; Primary Solar Array</span></div>
+              <div class="input-row">
+                <span style="flex:1; color:var(--text-muted);">Latitude:</span>
+                <input type="text" id="fc-cfg-lat" placeholder="e.g. 51.5074 (or paste lat, lon)" oninput="handleForecastLatInput(this.value)" style="width:190px; background:#090D16; color:var(--text-main); border:1px solid var(--border-bright); border-radius:6px; padding:5px 8px; font-family:var(--font-mono);" />
+              </div>
+              <div class="input-row">
+                <span style="flex:1; color:var(--text-muted);">Longitude:</span>
+                <input type="text" id="fc-cfg-lon" placeholder="e.g. -0.1278" style="width:190px; background:#090D16; color:var(--text-main); border:1px solid var(--border-bright); border-radius:6px; padding:5px 8px; font-family:var(--font-mono);" />
+              </div>
+              <div class="input-row">
+                <span style="flex:1; color:var(--text-muted);">Array Peak Capacity (kWp):</span>
+                <input type="number" id="fc-cfg-cap" step="0.1" min="0.1" max="200" value="5.0" style="width:110px;" />
+              </div>
+              <div class="input-row">
+                <span style="flex:1; color:var(--text-muted);">Roof Tilt Angle (°):</span>
+                <input type="number" id="fc-cfg-tilt" step="1" min="0" max="90" value="35" style="width:110px;" />
+              </div>
+              <div class="input-row">
+                <span style="flex:1; color:var(--text-muted);">Panel Azimuth (Compass °):</span>
+                <select id="fc-cfg-az-preset" onchange="onForecastAzPresetChange('', this.value)" style="width:125px;">
+                  <option value="180">South (180°)</option>
+                  <option value="135">South-East (135°)</option>
+                  <option value="225">South-West (225°)</option>
+                  <option value="90">East (90°)</option>
+                  <option value="270">West (270°)</option>
+                  <option value="45">North-East (45°)</option>
+                  <option value="315">North-West (315°)</option>
+                  <option value="0">North (0°)</option>
+                  <option value="custom">Custom</option>
+                </select>
+                <input type="number" id="fc-cfg-az" step="1" min="0" max="360" value="180" oninput="onForecastAzNumInput('', this.value)" style="width:76px;" />
+              </div>
+            </div>
+
+            <div class="ctrl-group">
+              <div class="ctrl-label">
+                <span>Second Roof / Split String (Optional)</span>
+                <label style="cursor:pointer;"><input type="checkbox" id="fc-cfg-a2-en" onchange="toggleForecastArray2Fields()" /> Enabled</label>
+              </div>
+              <div id="fc-cfg-a2-fields">
+                <div class="input-row">
+                  <span style="flex:1; color:var(--text-muted);">String 2 Capacity (kWp):</span>
+                  <input type="number" id="fc-cfg-cap2" step="0.1" min="0.1" max="200" value="2.0" style="width:110px;" />
+                </div>
+                <div class="input-row">
+                  <span style="flex:1; color:var(--text-muted);">String 2 Tilt Angle (°):</span>
+                  <input type="number" id="fc-cfg-tilt2" step="1" min="0" max="90" value="35" style="width:110px;" />
+                </div>
+                <div class="input-row">
+                  <span style="flex:1; color:var(--text-muted);">String 2 Azimuth (°):</span>
+                  <select id="fc-cfg-az2-preset" onchange="onForecastAzPresetChange('2', this.value)" style="width:125px;">
+                    <option value="180">South (180°)</option>
+                    <option value="135">South-East (135°)</option>
+                    <option value="225">South-West (225°)</option>
+                    <option value="90">East (90°)</option>
+                    <option value="270" selected>West (270°)</option>
+                    <option value="45">North-East (45°)</option>
+                    <option value="315">North-West (315°)</option>
+                    <option value="0">North (0°)</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                  <input type="number" id="fc-cfg-az2" step="1" min="0" max="360" value="270" oninput="onForecastAzNumInput('2', this.value)" style="width:76px;" />
+                </div>
+              </div>
+              <div class="input-row" style="margin-top:8px;">
+                <span style="flex:1; color:var(--text-muted);">Baseline System Efficiency (%):</span>
+                <input type="number" id="fc-cfg-base-eff" step="1" min="25" max="125" value="85" style="width:110px;" />
+              </div>
+            </div>
+          </div>
+
+          <div class="btn-row" style="margin-top:10px;">
+            <button class="btn primary" onclick="saveSolarForecastConfigUI()">💾 Save &amp; Sync Open-Meteo Forecast</button>
+            <span id="fc-cfg-status" style="font-size:12px; color:var(--text-muted);"></span>
+          </div>
+        </div>
+
+        <div class="kpi-strip" style="margin-bottom:14px;">
+          <div class="kpi-card" style="--accent: #F59E0B;">
+            <div class="kpi-title">☀ Today Adjusted Forecast</div>
+            <div class="kpi-val" id="fc-kpi-today-total">—</div>
+            <div class="kpi-sub" id="fc-kpi-today-rem">Remaining: — kWh | Peak: — kW</div>
+          </div>
+          <div class="kpi-card" style="--accent: #10B981;">
+            <div class="kpi-title">⚡ Today Actual Solar</div>
+            <div class="kpi-val" id="fc-kpi-today-actual">—</div>
+            <div class="kpi-sub" id="fc-kpi-today-vs">vs Adjusted Forecast</div>
+          </div>
+          <div class="kpi-card" style="--accent: #38BDF8;">
+            <div class="kpi-title">📅 Tomorrow Forecast</div>
+            <div class="kpi-val" id="fc-kpi-tomorrow">—</div>
+            <div class="kpi-sub">Efficiency-calibrated</div>
+          </div>
+          <div class="kpi-card" style="--accent: #A78BFA;">
+            <div class="kpi-title">🎯 Efficiency Factor</div>
+            <div class="kpi-val" id="fc-kpi-eff">—</div>
+            <div class="kpi-sub" id="fc-kpi-eff-sub">Baseline (awaiting actuals)</div>
+          </div>
+        </div>
+
+        <div class="panel" style="margin-bottom:14px;">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title">Hourly Solar Forecast vs Actual Trend (kW)</div>
+              <div class="panel-sub" id="fc-sync-subtitle">Open-Meteo Global Tilted Irradiance calibrated with learned site efficiency factor</div>
+              <div class="legend-bar" style="margin-top:6px;">
+                <span class="legend-item"><span class="legend-swatch" style="background:#F59E0B"></span>Adjusted Forecast (kW)</span>
+                <span class="legend-item"><span class="legend-swatch" style="background:#10B981"></span>Actual Solar PV (kW)</span>
+                <span class="legend-item"><span class="legend-swatch" style="background:#94A3B8"></span>Unadjusted Baseline (kW)</span>
+              </div>
+            </div>
+            <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+              <select id="fc-window-select" onchange="drawForecastHourlyChart()">
+                <option value="recent_48">Past 24h + Next 48h</option>
+                <option value="today_next_72">Today + Next 72h</option>
+                <option value="all">Full Window (Past 2d + 7d)</option>
+              </select>
+              <button class="btn" onclick="syncSolarForecastNow()">⟳ Sync Open-Meteo</button>
+              <button class="btn" onclick="toggleForecastConfigPanel()">⚙ Parameters</button>
+            </div>
+          </div>
+          <div class="canvas-wrap">
+            <canvas id="forecastHourlyCanvas" height="310"></canvas>
+            <div class="chart-tooltip" id="forecastHourlyTooltip"></div>
+          </div>
+        </div>
+
+        <div class="panel" style="margin-bottom:14px;">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title">Daily Solar Yield: Adjusted Forecast vs Actual (kWh / Day)</div>
+              <div class="legend-bar" style="margin-top:4px;">
+                <span class="legend-item"><span class="legend-swatch" style="background:#F59E0B"></span>Adjusted Forecast (kWh)</span>
+                <span class="legend-item"><span class="legend-swatch" style="background:#10B981"></span>Actual Solar PV (kWh)</span>
+              </div>
+            </div>
+          </div>
+          <div class="canvas-wrap">
+            <canvas id="forecastDailyCanvas" height="230"></canvas>
+            <div class="chart-tooltip" id="forecastDailyTooltip"></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title">Daily Solar Forecast &amp; Actuals Ledger</div>
+              <div class="panel-sub">Future days automatically scale by the learned efficiency factor as actual generation data accumulates</div>
+            </div>
+          </div>
+          <div class="data-table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Adjusted Forecast</th>
+                  <th>Actual Solar</th>
+                  <th>Variance</th>
+                  <th>Unadjusted Baseline</th>
+                  <th>Peak Forecast</th>
+                  <th>Avg Cloud</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="forecast-daily-tbody">
+                <tr><td colspan="8" style="text-align:center; color:var(--text-muted);">Loading solar forecast…</td></tr>
               </tbody>
             </table>
           </div>
@@ -1629,6 +1833,19 @@
           </div>
         </div>
 
+        <div class="panel" style="margin-top:16px;">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title">☀ Solar Forecasting (Open-Meteo)</div>
+              <div class="panel-sub">Configure location coordinates, roof tilt/azimuth, and array capacity for solar generation forecasts</div>
+            </div>
+            <button class="btn primary" onclick="openSolarForecastSettings()">⚙ Configure Solar Forecast</button>
+          </div>
+          <div id="settings-fc-summary" style="font-size:12.5px; color:var(--text-muted); line-height:1.6;">
+            Not yet configured — click <b>Configure Solar Forecast</b> to enter your coordinates &amp; panel parameters.
+          </div>
+        </div>
+
         <div class="panel" id="panel-remote-pairing" style="margin-top:16px;">
           <div class="panel-header">
             <div>
@@ -1988,6 +2205,7 @@
       toggleEl('pill-bat', showBat, 'inline-flex');
       toggleEl('tab-btn-bms', showBat, 'inline-block');
       toggleEl('tab-btn-evc', showEvc, 'inline-block');
+      toggleEl('tab-btn-forecast', showSolar, 'inline-block');
 
       const batTitleEl = document.getElementById('kpi-bat-title');
       if (batTitleEl) {
@@ -2309,6 +2527,8 @@
 
       if (tabId === 'history') {
         loadHistoryData();
+      } else if (tabId === 'forecast') {
+        loadSolarForecastTab();
       } else if (tabId === 'costs') {
         loadCostsTab();
       } else if (tabId === 'bms') {
@@ -2324,6 +2544,7 @@
             scanLocalNetwork(true);
           }
         });
+        loadSolarForecastConfigSummary();
       } else if (tabId === 'live') {
         drawLiveTimelineChart();
       }
@@ -4931,12 +5152,575 @@
     }
 
     // =========================================================================
+    // Solar Forecasting (Open-Meteo + Adaptive Efficiency Calibration)
+    // =========================================================================
+    let _lastSolarForecastData = null;
+
+    function toggleForecastConfigPanel(forceOpen) {
+      const panel = document.getElementById('fc-config-panel');
+      if (!panel) return;
+      const show = typeof forceOpen === 'boolean' ? forceOpen : panel.style.display === 'none';
+      panel.style.display = show ? 'block' : 'none';
+    }
+
+    function openSolarForecastSettings() {
+      const btn = document.getElementById('tab-btn-forecast');
+      switchTab('forecast', btn);
+      toggleForecastConfigPanel(true);
+    }
+
+    function handleForecastLatInput(val) {
+      if (val && val.includes(',')) {
+        const parts = val.split(',');
+        if (parts.length >= 2) {
+          const a = parts[0].trim();
+          const b = parts[1].trim();
+          if (a && b && !isNaN(Number(a)) && !isNaN(Number(b))) {
+            document.getElementById('fc-cfg-lat').value = a;
+            document.getElementById('fc-cfg-lon').value = b;
+          }
+        }
+      }
+    }
+
+    function onForecastAzPresetChange(suffix, val) {
+      if (val !== 'custom') {
+        document.getElementById(`fc-cfg-az${suffix}`).value = val;
+      }
+    }
+
+    function onForecastAzNumInput(suffix, val) {
+      const sel = document.getElementById(`fc-cfg-az${suffix}-preset`);
+      if (!sel) return;
+      const num = Math.round(Number(val));
+      const match = Array.from(sel.options).find(o => o.value !== 'custom' && Number(o.value) === num);
+      sel.value = match ? match.value : 'custom';
+    }
+
+    function toggleForecastArray2Fields() {
+      const en = document.getElementById('fc-cfg-a2-en').checked;
+      const box = document.getElementById('fc-cfg-a2-fields');
+      if (box) {
+        box.style.opacity = en ? '1' : '0.45';
+        box.querySelectorAll('input, select').forEach(el => { el.disabled = !en; });
+      }
+    }
+
+    function _populateSolarForecastForm(cfg) {
+      if (!cfg) return;
+      document.getElementById('fc-cfg-lat').value = cfg.latitude ?? '';
+      document.getElementById('fc-cfg-lon').value = cfg.longitude ?? '';
+      document.getElementById('fc-cfg-cap').value = cfg.capacity_kwp ?? 5.0;
+      document.getElementById('fc-cfg-tilt').value = cfg.tilt_deg ?? 35;
+      const az1 = cfg.azimuth_deg ?? 180;
+      document.getElementById('fc-cfg-az').value = az1;
+      onForecastAzNumInput('', az1);
+
+      document.getElementById('fc-cfg-a2-en').checked = !!cfg.array2_enabled;
+      document.getElementById('fc-cfg-cap2').value = cfg.array2_capacity_kwp || 2.0;
+      document.getElementById('fc-cfg-tilt2').value = cfg.array2_tilt_deg ?? 35;
+      const az2 = cfg.array2_azimuth_deg ?? 270;
+      document.getElementById('fc-cfg-az2').value = az2;
+      onForecastAzNumInput('2', az2);
+      toggleForecastArray2Fields();
+
+      document.getElementById('fc-cfg-base-eff').value = Math.round((cfg.base_efficiency ?? 0.85) * 100);
+    }
+
+    async function loadSolarForecastConfigSummary() {
+      try {
+        const res = await fetch('/api/solar-forecast/config');
+        if (!res.ok) return;
+        const cfg = await res.json();
+        const el = document.getElementById('settings-fc-summary');
+        if (!el) return;
+        if (cfg.configured) {
+          let txt = `Configured: <b>${Number(cfg.latitude).toFixed(4)}, ${Number(cfg.longitude).toFixed(4)}</b> | ` +
+            `Primary: <b>${cfg.capacity_kwp} kWp</b> (${cfg.tilt_deg}° tilt, ${cfg.azimuth_deg}° azimuth)`;
+          if (cfg.array2_enabled && cfg.array2_capacity_kwp > 0) {
+            txt += ` + String 2: <b>${cfg.array2_capacity_kwp} kWp</b> (${cfg.array2_tilt_deg}° tilt, ${cfg.array2_azimuth_deg}° azimuth)`;
+          }
+          if (cfg.last_sync_at) txt += `<br>Last Open-Meteo Sync: <code>${cfg.last_sync_at.replace('T', ' ')}</code>`;
+          el.innerHTML = txt;
+        } else {
+          el.innerHTML = 'Not yet configured — click <b>Configure Solar Forecast</b> to enter your coordinates &amp; panel parameters.';
+        }
+      } catch (e) {}
+    }
+
+    async function saveSolarForecastConfigUI() {
+      const statusEl = document.getElementById('fc-cfg-status');
+      const lat = parseFloat(document.getElementById('fc-cfg-lat').value.trim());
+      const lon = parseFloat(document.getElementById('fc-cfg-lon').value.trim());
+      if (isNaN(lat) || isNaN(lon)) {
+        if (statusEl) statusEl.textContent = 'Please enter valid numeric Latitude & Longitude.';
+        showToast('Invalid Latitude or Longitude');
+        return;
+      }
+      const tiltVal = parseFloat(document.getElementById('fc-cfg-tilt').value);
+      const azVal = parseFloat(document.getElementById('fc-cfg-az').value);
+      const tilt2Val = parseFloat(document.getElementById('fc-cfg-tilt2').value);
+      const az2Val = parseFloat(document.getElementById('fc-cfg-az2').value);
+      const payload = {
+        enabled: true,
+        latitude: lat,
+        longitude: lon,
+        capacity_kwp: parseFloat(document.getElementById('fc-cfg-cap').value) || 5.0,
+        tilt_deg: isNaN(tiltVal) ? 35.0 : tiltVal,
+        azimuth_deg: isNaN(azVal) ? 180.0 : azVal,
+        array2_enabled: document.getElementById('fc-cfg-a2-en').checked,
+        array2_capacity_kwp: parseFloat(document.getElementById('fc-cfg-cap2').value) || 0.0,
+        array2_tilt_deg: isNaN(tilt2Val) ? 35.0 : tilt2Val,
+        array2_azimuth_deg: isNaN(az2Val) ? 270.0 : az2Val,
+        base_efficiency: (parseFloat(document.getElementById('fc-cfg-base-eff').value) || 85) / 100.0,
+        forecast_days: 7,
+      };
+      if (statusEl) statusEl.textContent = 'Saving & syncing with Open-Meteo…';
+      try {
+        const res = await fetch('/api/solar-forecast/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          if (statusEl) statusEl.textContent = data.detail || 'Save failed';
+          showToast(data.detail || 'Failed to save solar forecast config');
+          return;
+        }
+        if (statusEl) statusEl.textContent = 'Saved & synced!';
+        showToast('Solar forecast saved & synced with Open-Meteo');
+        toggleForecastConfigPanel(false);
+        await loadSolarForecastTab();
+      } catch (err) {
+        if (statusEl) statusEl.textContent = String(err);
+        showToast('Failed to save solar forecast config');
+      }
+    }
+
+    async function syncSolarForecastNow() {
+      showToast('Syncing solar forecast from Open-Meteo…');
+      try {
+        const res = await fetch('/api/solar-forecast/sync', { method: 'POST' });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          showToast(err.detail || 'Open-Meteo sync failed');
+          return;
+        }
+        showToast('Open-Meteo forecast updated');
+        await loadSolarForecastTab();
+      } catch (e) {
+        showToast('Open-Meteo sync failed');
+      }
+    }
+
+    async function loadSolarForecastTab() {
+      try {
+        const res = await fetch('/api/solar-forecast/data?past_days=2&forecast_days=7');
+        if (!res.ok) return;
+        const data = await res.json();
+        _lastSolarForecastData = data;
+        _populateSolarForecastForm(data.config);
+
+        const banner = document.getElementById('fc-unconfigured-banner');
+        if (banner) banner.style.display = data.configured ? 'none' : 'block';
+        if (!data.configured) {
+          toggleForecastConfigPanel(true);
+        }
+
+        const ts = data.today_summary || {};
+        const eff = data.efficiency || {};
+        document.getElementById('fc-kpi-today-total').textContent =
+          data.configured ? `${Number(ts.forecast_total_kwh || 0).toFixed(1)} kWh` : '—';
+        document.getElementById('fc-kpi-today-rem').textContent =
+          data.configured
+            ? `Remaining: ${Number(ts.remaining_forecast_kwh || 0).toFixed(1)} kWh | Peak: ${Number(ts.peak_forecast_kw || 0).toFixed(2)} kW`
+            : 'Configure array to forecast';
+        document.getElementById('fc-kpi-today-actual').textContent = `${Number(ts.actual_so_far_kwh || 0).toFixed(1)} kWh`;
+        const pctVs = ts.forecast_total_kwh > 0 ? Math.round((ts.actual_so_far_kwh / ts.forecast_total_kwh) * 100) : 0;
+        document.getElementById('fc-kpi-today-vs').textContent =
+          data.configured && ts.forecast_total_kwh > 0 ? `${pctVs}% of today's adjusted forecast` : 'vs Adjusted Forecast';
+        document.getElementById('fc-kpi-tomorrow').textContent =
+          ts.tomorrow_forecast_kwh != null ? `${Number(ts.tomorrow_forecast_kwh).toFixed(1)} kWh` : '—';
+
+        document.getElementById('fc-kpi-eff').textContent = `${Number(eff.efficiency_pct ?? 85).toFixed(1)}%`;
+        let effSub = eff.confidence || 'Baseline';
+        if (eff.mae_kw != null) effSub += ` | MAE: ${Number(eff.mae_kw).toFixed(2)} kW`;
+        document.getElementById('fc-kpi-eff-sub').textContent = effSub;
+
+        const subEl = document.getElementById('fc-sync-subtitle');
+        if (subEl) {
+          if (data.last_sync_error) {
+            subEl.textContent = `Last sync error: ${data.last_sync_error}`;
+          } else if (data.last_sync_at) {
+            subEl.textContent = `Open-Meteo GTI calibrated with ${Number(eff.efficiency_pct ?? 85).toFixed(1)}% site efficiency · Last sync: ${data.last_sync_at.replace('T', ' ')}`;
+          }
+        }
+
+        drawForecastHourlyChart();
+        drawForecastDailyChart();
+        renderForecastDailyTable(data.daily || []);
+      } catch (e) {}
+    }
+
+    function drawForecastHourlyChart() {
+      const canvas = document.getElementById('forecastHourlyCanvas');
+      const tooltip = document.getElementById('forecastHourlyTooltip');
+      if (!canvas) return;
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width === 0) return;
+      const W = rect.width;
+      const H = 310;
+      canvas.width = Math.round(W * dpr);
+      canvas.height = Math.round(H * dpr);
+      canvas.style.height = H + 'px';
+
+      const ctx = canvas.getContext('2d');
+      ctx.save();
+      ctx.scale(dpr, dpr);
+      ctx.fillStyle = '#0B101D';
+      ctx.fillRect(0, 0, W, H);
+
+      const allPts = _lastSolarForecastData?.hourly || [];
+      const winMode = document.getElementById('fc-window-select')?.value || 'recent_48';
+      const now = new Date();
+      const pad2 = n => String(n).padStart(2, '0');
+      const todayStr = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
+      const nowHourIso = `${todayStr}T${pad2(now.getHours())}:00:00`;
+
+      let pts = allPts;
+      if (winMode === 'recent_48') {
+        const minTs = new Date(now.getTime() - 24 * 3600 * 1000);
+        const maxTs = new Date(now.getTime() + 48 * 3600 * 1000);
+        const minIso = `${minTs.getFullYear()}-${pad2(minTs.getMonth() + 1)}-${pad2(minTs.getDate())}T${pad2(minTs.getHours())}:00:00`;
+        const maxIso = `${maxTs.getFullYear()}-${pad2(maxTs.getMonth() + 1)}-${pad2(maxTs.getDate())}T${pad2(maxTs.getHours())}:00:00`;
+        pts = allPts.filter(p => p.ts >= minIso && p.ts <= maxIso);
+      } else if (winMode === 'today_next_72') {
+        const maxTs = new Date(now.getTime() + 72 * 3600 * 1000);
+        const maxIso = `${maxTs.getFullYear()}-${pad2(maxTs.getMonth() + 1)}-${pad2(maxTs.getDate())}T${pad2(maxTs.getHours())}:00:00`;
+        pts = allPts.filter(p => p.date_str >= todayStr && p.ts <= maxIso);
+      }
+
+      if (pts.length === 0) {
+        ctx.fillStyle = '#64748B';
+        ctx.font = '13px Inter, system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('No forecast data yet — configure parameters above and click Sync Open-Meteo.', W / 2, H / 2);
+        ctx.restore();
+        return;
+      }
+
+      const pad = { l: 48, r: 16, t: 18, b: 30 };
+      const cw = W - pad.l - pad.r;
+      const ch = H - pad.t - pad.b;
+
+      let maxKw = 1.0;
+      for (const p of pts) {
+        maxKw = Math.max(maxKw, p.forecast_kw || 0, p.baseline_kw || 0, p.actual_kw || 0);
+      }
+      maxKw = Math.ceil(maxKw * 2) / 2;
+
+      // Grid lines
+      ctx.strokeStyle = 'rgba(148,163,184,0.12)';
+      ctx.lineWidth = 1;
+      ctx.font = '10px JetBrains Mono, monospace';
+      ctx.fillStyle = '#64748B';
+      for (let g = 0; g <= 4; g++) {
+        const gy = pad.t + (ch * g) / 4;
+        ctx.beginPath();
+        ctx.moveTo(pad.l, gy);
+        ctx.lineTo(pad.l + cw, gy);
+        ctx.stroke();
+        const val = (maxKw * (4 - g)) / 4;
+        ctx.textAlign = 'right';
+        ctx.fillText(`${val.toFixed(1)}kW`, pad.l - 6, gy + 3);
+      }
+
+      const xAt = idx => pad.l + (pts.length > 1 ? (idx / (pts.length - 1)) * cw : cw / 2);
+      const yAt = kw => pad.t + ch - (Math.max(0, kw) / maxKw) * ch;
+
+      // Day dividers & x-axis labels
+      let lastDay = '';
+      pts.forEach((p, i) => {
+        const x = xAt(i);
+        if (p.date_str !== lastDay) {
+          lastDay = p.date_str;
+          ctx.strokeStyle = 'rgba(148,163,184,0.18)';
+          ctx.beginPath();
+          ctx.moveTo(x, pad.t);
+          ctx.lineTo(x, pad.t + ch);
+          ctx.stroke();
+          ctx.fillStyle = '#94A3B8';
+          ctx.textAlign = 'left';
+          ctx.fillText(p.date_str.slice(5), x + 3, H - 10);
+        } else if (pts.length <= 80 && p.hour_str === '12:00') {
+          ctx.fillStyle = '#64748B';
+          ctx.textAlign = 'center';
+          ctx.fillText('12:00', x, H - 10);
+        }
+      });
+
+      // Now vertical line
+      const nowIdx = pts.findIndex(p => p.ts >= nowHourIso);
+      if (nowIdx >= 0) {
+        const nx = xAt(nowIdx);
+        ctx.save();
+        ctx.strokeStyle = 'rgba(56,189,248,0.65)';
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(nx, pad.t);
+        ctx.lineTo(nx, pad.t + ch);
+        ctx.stroke();
+        ctx.fillStyle = '#38BDF8';
+        ctx.textAlign = 'center';
+        ctx.fillText('NOW', nx, pad.t + 10);
+        ctx.restore();
+      }
+
+      // 1. Unadjusted baseline dashed line
+      ctx.save();
+      ctx.strokeStyle = 'rgba(148,163,184,0.55)';
+      ctx.lineWidth = 1.3;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      pts.forEach((p, i) => {
+        const x = xAt(i);
+        const y = yAt(p.baseline_kw || 0);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      ctx.restore();
+
+      // 2. Adjusted Forecast area + line (#F59E0B)
+      ctx.save();
+      ctx.beginPath();
+      pts.forEach((p, i) => {
+        const x = xAt(i);
+        const y = yAt(p.forecast_kw || 0);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.lineTo(xAt(pts.length - 1), pad.t + ch);
+      ctx.lineTo(xAt(0), pad.t + ch);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(245,158,11,0.14)';
+      ctx.fill();
+
+      ctx.strokeStyle = '#F59E0B';
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      pts.forEach((p, i) => {
+        const x = xAt(i);
+        const y = yAt(p.forecast_kw || 0);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      ctx.restore();
+
+      // 3. Actual Solar PV line (#10B981)
+      ctx.save();
+      ctx.strokeStyle = '#10B981';
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      let started = false;
+      pts.forEach((p, i) => {
+        if (p.actual_kw == null) {
+          started = false;
+          return;
+        }
+        const x = xAt(i);
+        const y = yAt(p.actual_kw);
+        if (!started) {
+          ctx.moveTo(x, y);
+          started = true;
+        } else {
+          ctx.lineTo(x, y);
+        }
+      });
+      ctx.stroke();
+      ctx.restore();
+
+      ctx.restore();
+
+      canvas._fcPts = pts;
+      canvas._fcPad = pad;
+      canvas._fcCw = cw;
+      if (tooltip && !canvas._fcHoverBound) {
+        canvas._fcHoverBound = true;
+        canvas.onmousemove = (ev) => {
+          const list = canvas._fcPts || [];
+          if (list.length === 0) return;
+          const r = canvas.getBoundingClientRect();
+          const mx = ev.clientX - r.left;
+          const p = canvas._fcPad;
+          if (mx < p.l || mx > p.l + canvas._fcCw) {
+            tooltip.style.display = 'none';
+            return;
+          }
+          const frac = (mx - p.l) / Math.max(1, canvas._fcCw);
+          const idx = Math.max(0, Math.min(list.length - 1, Math.round(frac * (list.length - 1))));
+          const pt = list[idx];
+          let html = `<b>${pt.date_str} ${pt.hour_str}</b><br>` +
+            `<span style="color:#F59E0B;">Adjusted Forecast:</span> ${Number(pt.forecast_kw).toFixed(2)} kW<br>` +
+            `<span style="color:#94A3B8;">Unadjusted Baseline:</span> ${Number(pt.baseline_kw).toFixed(2)} kW<br>`;
+          if (pt.actual_kw != null) {
+            html += `<span style="color:#10B981;">Actual Solar PV:</span> ${Number(pt.actual_kw).toFixed(2)} kW<br>`;
+          }
+          html += `Cloud: ${Math.round(pt.cloud_cover_pct)}% | GTI: ${Math.round(pt.gti_wm2)} W/m² | ${Number(pt.temp_c).toFixed(1)}°C`;
+          tooltip.innerHTML = html;
+          tooltip.style.display = 'block';
+          const leftPos = Math.min(r.width - 210, Math.max(8, mx + 12));
+          tooltip.style.left = leftPos + 'px';
+          tooltip.style.top = '12px';
+        };
+        canvas.onmouseleave = () => { tooltip.style.display = 'none'; };
+      }
+    }
+
+    function drawForecastDailyChart() {
+      const canvas = document.getElementById('forecastDailyCanvas');
+      const tooltip = document.getElementById('forecastDailyTooltip');
+      if (!canvas) return;
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width === 0) return;
+      const W = rect.width;
+      const H = 230;
+      canvas.width = Math.round(W * dpr);
+      canvas.height = Math.round(H * dpr);
+      canvas.style.height = H + 'px';
+
+      const ctx = canvas.getContext('2d');
+      ctx.save();
+      ctx.scale(dpr, dpr);
+      ctx.fillStyle = '#0B101D';
+      ctx.fillRect(0, 0, W, H);
+
+      const days = _lastSolarForecastData?.daily || [];
+      if (days.length === 0) {
+        ctx.fillStyle = '#64748B';
+        ctx.font = '13px Inter, system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('No daily solar forecast data yet', W / 2, H / 2);
+        ctx.restore();
+        return;
+      }
+
+      const pad = { l: 44, r: 16, t: 18, b: 28 };
+      const cw = W - pad.l - pad.r;
+      const ch = H - pad.t - pad.b;
+
+      let maxKwh = 5;
+      for (const d of days) {
+        maxKwh = Math.max(maxKwh, d.forecast_kwh || 0, d.actual_kwh || 0);
+      }
+      maxKwh = Math.ceil(maxKwh / 5) * 5;
+
+      ctx.strokeStyle = 'rgba(148,163,184,0.12)';
+      ctx.lineWidth = 1;
+      ctx.font = '10px JetBrains Mono, monospace';
+      ctx.fillStyle = '#64748B';
+      for (let g = 0; g <= 4; g++) {
+        const gy = pad.t + (ch * g) / 4;
+        ctx.beginPath();
+        ctx.moveTo(pad.l, gy);
+        ctx.lineTo(pad.l + cw, gy);
+        ctx.stroke();
+        const val = (maxKwh * (4 - g)) / 4;
+        ctx.textAlign = 'right';
+        ctx.fillText(`${val.toFixed(0)}`, pad.l - 6, gy + 3);
+      }
+
+      const groupW = cw / days.length;
+      const barW = Math.min(24, Math.max(6, (groupW - 12) / 2));
+      const hitboxes = [];
+
+      days.forEach((d, i) => {
+        const gx = pad.l + i * groupW + groupW / 2;
+        const hasAct = d.actual_kwh != null;
+        const fcX = hasAct ? gx - barW : gx - barW / 2;
+        const fcH = ((d.forecast_kwh || 0) / maxKwh) * ch;
+        ctx.fillStyle = d.is_today ? '#FBBF24' : '#F59E0B';
+        ctx.fillRect(fcX, pad.t + ch - fcH, barW - 1, fcH);
+
+        if (hasAct) {
+          const actH = ((d.actual_kwh || 0) / maxKwh) * ch;
+          ctx.fillStyle = '#10B981';
+          ctx.fillRect(gx, pad.t + ch - actH, barW - 1, actH);
+        }
+
+        ctx.fillStyle = d.is_today ? '#38BDF8' : '#94A3B8';
+        ctx.textAlign = 'center';
+        ctx.fillText(d.date_str.slice(5), gx, H - 8);
+        hitboxes.push({ x: pad.l + i * groupW, w: groupW, d });
+      });
+
+      ctx.restore();
+
+      canvas._fcDailyHits = hitboxes;
+      if (tooltip && !canvas._fcDailyHoverBound) {
+        canvas._fcDailyHoverBound = true;
+        canvas.onmousemove = (ev) => {
+          const r = canvas.getBoundingClientRect();
+          const mx = ev.clientX - r.left;
+          const hit = (canvas._fcDailyHits || []).find(h => mx >= h.x && mx <= h.x + h.w);
+          if (!hit) { tooltip.style.display = 'none'; return; }
+          const d = hit.d;
+          let html = `<b>${d.date_str}${d.is_today ? ' (Today)' : ''}</b><br>` +
+            `<span style="color:#F59E0B;">Adjusted Forecast:</span> ${Number(d.forecast_kwh).toFixed(2)} kWh<br>`;
+          if (d.actual_kwh != null) {
+            html += `<span style="color:#10B981;">Actual Solar:</span> ${Number(d.actual_kwh).toFixed(2)} kWh<br>`;
+          }
+          html += `<span style="color:#94A3B8;">Unadjusted Baseline:</span> ${Number(d.baseline_kwh).toFixed(2)} kWh<br>` +
+            `Peak: ${Number(d.peak_forecast_kw).toFixed(2)} kW | Cloud: ${Math.round(d.cloud_cover_avg_pct)}%`;
+          tooltip.innerHTML = html;
+          tooltip.style.display = 'block';
+          tooltip.style.left = Math.min(r.width - 210, Math.max(8, mx + 10)) + 'px';
+          tooltip.style.top = '10px';
+        };
+        canvas.onmouseleave = () => { tooltip.style.display = 'none'; };
+      }
+    }
+
+    function renderForecastDailyTable(days) {
+      const tbody = document.getElementById('forecast-daily-tbody');
+      if (!tbody) return;
+      if (!days || days.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; color:var(--text-muted);">No forecast data yet — configure parameters and sync Open-Meteo.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = days.map(d => {
+        const actStr = d.actual_kwh != null ? `${Number(d.actual_kwh).toFixed(2)} kWh` : '—';
+        let varStr = '—';
+        if (d.actual_kwh != null && d.forecast_kwh > 0) {
+          const diff = d.actual_kwh - d.forecast_kwh;
+          const col = diff >= 0 ? '#10B981' : '#F87171';
+          varStr = `<span style="color:${col};">${diff >= 0 ? '+' : ''}${diff.toFixed(2)} kWh</span>`;
+        }
+        const status = d.is_today ? '<span class="pill ok">Today</span>' : (d.is_future ? '<span class="pill">Forecast</span>' : '<span class="pill">Past</span>');
+        return `<tr>
+          <td><code>${d.date_str}</code></td>
+          <td><b style="color:#F59E0B;">${Number(d.forecast_kwh).toFixed(2)} kWh</b></td>
+          <td><b style="color:#10B981;">${actStr}</b></td>
+          <td>${varStr}</td>
+          <td style="color:var(--text-muted);">${Number(d.baseline_kwh).toFixed(2)} kWh</td>
+          <td>${Number(d.peak_forecast_kw).toFixed(2)} kW</td>
+          <td>${Math.round(d.cloud_cover_avg_pct)}%</td>
+          <td>${status}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    // =========================================================================
     // Boot
     // =========================================================================
     window.addEventListener('resize', () => {
       drawLiveTimelineChart();
       if (document.getElementById('tab-history').classList.contains('active')) {
         loadHistoryData();
+      } else if (document.getElementById('tab-forecast').classList.contains('active')) {
+        drawForecastHourlyChart();
+        drawForecastDailyChart();
       } else if (document.getElementById('tab-costs').classList.contains('active')) {
         if (_lastCostIntradayData) drawCostIntradayChart(_lastCostIntradayData);
       } else if (document.getElementById('tab-bms').classList.contains('active')) {

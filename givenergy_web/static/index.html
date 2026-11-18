@@ -1332,8 +1332,59 @@
             </div>
 
             <div style="display:flex; gap:8px; margin-top:14px; flex-wrap:wrap;">
-              <button class="btn primary" onclick="saveTariffConfigUI()">💾 Save &amp; Apply Tariffs</button>
+              <button class="btn" id="btn-check-tariff" onclick="checkTariffConfigUI()">🔍 Check Tariff</button>
+              <button class="btn primary" id="btn-save-new-tariff" onclick="openSaveTariffModal()">💾 Save New Tariff</button>
               <button class="btn" onclick="syncOctopusRatesNow()">⟳ Sync Octopus Rates</button>
+            </div>
+
+            <!-- Check Tariff Preview Box -->
+            <div id="tariff-check-preview" style="display:none; margin-top:14px; padding:12px 14px; background:rgba(56,189,248,0.08); border:1px solid rgba(56,189,248,0.35); border-radius:8px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:8px;">
+                <div style="font-weight:600; font-size:13px; color:#38BDF8;">🔍 Tariff Check Preview (Not Saved)</div>
+                <div style="display:flex; gap:6px; align-items:center;">
+                  <select id="tariff-check-days" style="font-size:11.5px; padding:3px 6px;" onchange="checkTariffConfigUI()">
+                    <option value="7">Last 7 Days</option>
+                    <option value="30" selected>Last 30 Days</option>
+                    <option value="90">Last 90 Days</option>
+                    <option value="365">Last 365 Days</option>
+                    <option value="0">All Time</option>
+                  </select>
+                  <button class="btn" style="padding:2px 8px; font-size:11px;" onclick="document.getElementById('tariff-check-preview').style.display='none'">✕ Dismiss</button>
+                </div>
+              </div>
+              <div id="tariff-check-body" style="font-size:12px; color:var(--text-main);"></div>
+            </div>
+
+            <!-- Applied Tariffs / History -->
+            <div style="border-top:1px solid var(--border); padding-top:12px; margin-top:16px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px; margin-bottom:8px;">
+                <div>
+                  <div style="font-weight:600; font-size:13px; color:var(--text-main);">📅 Applied Tariffs &amp; Change History</div>
+                  <div style="font-size:11.5px; color:var(--text-muted);">Cost calculations automatically use the tariff active for each date timeframe</div>
+                </div>
+              </div>
+              <div id="tariff-history-list" style="display:flex; flex-direction:column; gap:8px;">
+                <div style="font-size:12px; color:var(--text-muted);">Loading tariff history…</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Save New Tariff Effective Date Modal -->
+          <div id="save-tariff-modal" style="display:none; position:fixed; inset:0; z-index:9999; background:rgba(2,6,23,0.75); backdrop-filter:blur(4px); align-items:center; justify-content:center; padding:16px;">
+            <div style="background:#0F172A; border:1px solid var(--border-bright); border-radius:12px; max-width:440px; width:100%; padding:18px 20px; box-shadow:0 20px 50px rgba(0,0,0,0.6);">
+              <div style="font-size:15px; font-weight:700; margin-bottom:6px;">💾 Save New Tariff</div>
+              <div style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">
+                Specify the date from which this tariff should be applied. Costs before this date will continue to use their recorded tariff(s).
+              </div>
+              <div id="save-tariff-modal-summary" style="font-size:12px; padding:10px 12px; background:rgba(15,23,42,0.7); border:1px solid var(--border); border-radius:8px; margin-bottom:12px;"></div>
+              <div class="input-row" style="margin-bottom:14px;">
+                <span style="flex:1; color:var(--text-muted); font-size:12.5px;">Apply From Date:</span>
+                <input type="date" id="save-tariff-effective-date" style="background:#090D16; color:var(--text-main); border:1px solid var(--border-bright); border-radius:6px; padding:6px 10px;" />
+              </div>
+              <div style="display:flex; justify-content:flex-end; gap:8px;">
+                <button class="btn" onclick="closeSaveTariffModal()">Cancel</button>
+                <button class="btn primary" id="btn-confirm-save-tariff" onclick="confirmSaveNewTariff()">✅ Confirm &amp; Save Tariff</button>
+              </div>
             </div>
           </div>
 
@@ -4823,6 +4874,108 @@
         document.getElementById(`${side}-description`).value = sideCfg.description || '';
         renderTariffWindows(side, sideCfg.windows || []);
       }
+
+      renderTariffHistoryList(cfg);
+    }
+
+    function _escapeHtml(str) {
+      return String(str ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function _formatTariffSideSummary(sideCfg, subSym) {
+      if (!sideCfg) return '—';
+      const sub = subSym || 'p';
+      const wins = Array.isArray(sideCfg.windows) ? sideCfg.windows : [];
+      const baseRate = Number(sideCfg.default_rate_p ?? 0).toFixed(2);
+      const displayName = (sideCfg.description || '').trim() || sideCfg.label || 'Tariff';
+      if (wins.length > 0) {
+        const winText = wins.map(w => `${w.start}-${w.end} @ ${Number(w.rate_p ?? 0).toFixed(2)}${sub}`).join(', ');
+        return `${displayName} (Base ${baseRate}${sub}, ${winText})`;
+      }
+      return `${displayName} (${baseRate}${sub}/kWh)`;
+    }
+
+    function renderTariffHistoryList(cfg) {
+      const container = document.getElementById('tariff-history-list');
+      if (!container) return;
+      const history = Array.isArray(cfg.tariff_history) ? cfg.tariff_history : [];
+      const sub = cfg.sub_unit_symbol || 'p';
+      const today = _todayIso();
+
+      if (!history.length) {
+        container.innerHTML = `
+          <div style="padding:10px 12px; background:rgba(15,23,42,0.55); border:1px solid var(--border); border-radius:8px; font-size:12px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:4px;">
+              <span style="font-weight:600; color:var(--text-main);">Initial / Default Tariff (All Dates)</span>
+              <span class="pill ok" style="font-size:10.5px;">Active</span>
+            </div>
+            <div style="color:var(--text-muted); line-height:1.5;">
+              <div><span style="color:#F87171;">⬇ Import:</span> ${_escapeHtml(_formatTariffSideSummary(cfg.import_tariff, sub))}</div>
+              <div><span style="color:#34D399;">⬆ Export:</span> ${_escapeHtml(_formatTariffSideSummary(cfg.export_tariff, sub))}</div>
+              <div>Standing Charge: ${Number(cfg.standing_charge_p ?? 60).toFixed(2)}${sub}/day</div>
+            </div>
+          </div>
+        `;
+        return;
+      }
+
+      // Sort chronologically to find which entry is original/first and which is currently active for today
+      const ordered = [...history].sort((a, b) => String(a.effective_from).localeCompare(String(b.effective_from)));
+      const originalId = ordered[0].id;
+      let activeId = ordered[0].id;
+      for (const item of ordered) {
+        if (item.effective_from <= today) activeId = item.id;
+      }
+
+      // Display newest first
+      const displayList = [...ordered].reverse();
+      container.innerHTML = displayList.map(entry => {
+        const eff = entry.effective_from <= '1970-01-01' ? 'Initial (Baseline)' : entry.effective_from;
+        let statusHtml = '<span class="pill" style="font-size:10.5px;">Historical</span>';
+        if (entry.id === activeId) {
+          statusHtml = '<span class="pill ok" style="font-size:10.5px;">Active</span>';
+        } else if (entry.effective_from > today) {
+          statusHtml = '<span class="pill warn" style="font-size:10.5px;">Scheduled</span>';
+        }
+        const actionHtml = entry.id === originalId
+          ? '<span style="font-size:11px; color:var(--text-muted);">Original</span>'
+          : `<button class="btn danger" style="padding:3px 8px; font-size:11px;" onclick="removeTariffHistoryEntry('${_escapeHtml(entry.id)}')">🗑 Remove</button>`;
+        return `
+          <div style="padding:10px 12px; background:rgba(15,23,42,0.55); border:1px solid var(--border); border-radius:8px; font-size:12px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:4px; flex-wrap:wrap;">
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span style="font-weight:600; color:var(--text-main);">From ${eff}</span>
+                ${statusHtml}
+              </div>
+              ${actionHtml}
+            </div>
+            <div style="color:var(--text-muted); line-height:1.5;">
+              <div><span style="color:#F87171;">⬇ Import:</span> ${_escapeHtml(_formatTariffSideSummary(entry.import_tariff, sub))}</div>
+              <div><span style="color:#34D399;">⬆ Export:</span> ${_escapeHtml(_formatTariffSideSummary(entry.export_tariff, sub))}</div>
+              <div>Standing Charge: ${Number(entry.standing_charge_p ?? 0).toFixed(2)}${sub}/day</div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function removeTariffHistoryEntry(entryId) {
+      if (!confirm('Remove this applied tariff from history? Cost calculations will immediately recalculate using the remaining tariffs.')) {
+        return;
+      }
+      const res = await fetch(`/api/tariffs/history/${encodeURIComponent(entryId)}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        showToast('Applied tariff removed');
+        await loadCostsTab();
+      } else {
+        showToast(data.error || 'Failed to remove tariff');
+      }
     }
 
     async function lookupTariffPostcode() {
@@ -4842,7 +4995,8 @@
       const mode = document.getElementById(`${side}-mode`).value;
       const presetSel = document.getElementById(`${side}-preset-select`);
       const octSel = document.getElementById(`${side}-octopus-product`);
-      let label = 'Custom Tariff';
+      const desc = (document.getElementById(`${side}-description`).value || '').trim();
+      let label = desc || 'Custom Tariff';
       if (mode === 'octopus_api' && octSel.selectedOptions[0]) {
         label = octSel.selectedOptions[0].textContent;
       } else if (mode === 'preset' && presetSel.selectedOptions[0]) {
@@ -4852,7 +5006,7 @@
         mode,
         preset_id: mode === 'preset' ? presetSel.value : '',
         label,
-        description: (document.getElementById(`${side}-description`).value || '').trim(),
+        description: desc,
         octopus_product_code: mode === 'octopus_api' ? octSel.value : '',
         octopus_tariff_code: '',
         default_rate_p: parseFloat(document.getElementById(`${side}-default-rate`).value || '0') || 0,
@@ -4860,10 +5014,10 @@
       };
     }
 
-    async function saveTariffConfigUI() {
+    function _buildTariffConfigPayload() {
       const cur = document.getElementById('tariff-currency').value || '£';
       const subMap = { '£': 'p', '€': 'c', '$': '¢' };
-      const payload = {
+      return {
         currency_symbol: cur,
         sub_unit_symbol: subMap[cur] || 'p',
         region: document.getElementById('tariff-region').value || 'H',
@@ -4875,21 +5029,125 @@
         price_cap_standing_charge_p: parseFloat(document.getElementById('cfg-cap-sc').value || '60.00') || 60.00,
         price_cap_auto_sync: !!document.getElementById('cfg-cap-auto').checked,
       };
-      const res = await fetch('/api/tariffs/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json();
-      if (res.ok && data.ok) {
-        if (data.sync_error) {
-          showToast(`Saved, but Octopus sync failed: ${data.sync_error}`);
-        } else {
-          showToast('Tariff configuration saved & applied');
+    }
+
+    async function checkTariffConfigUI() {
+      const btn = document.getElementById('btn-check-tariff');
+      const previewBox = document.getElementById('tariff-check-preview');
+      const bodyEl = document.getElementById('tariff-check-body');
+      const daysEl = document.getElementById('tariff-check-days');
+      const days = daysEl ? parseInt(daysEl.value || '30', 10) : 30;
+
+      if (btn) btn.disabled = true;
+      if (previewBox) previewBox.style.display = 'block';
+      if (bodyEl) bodyEl.innerHTML = '<span style="color:var(--text-muted);">Calculating estimated costs against your recorded history…</span>';
+
+      try {
+        const payload = { ..._buildTariffConfigPayload(), days };
+        const res = await fetch('/api/tariffs/check', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          bodyEl.innerHTML = `<span style="color:#F87171;">${_escapeHtml(data.error || 'Failed to check tariff')}</span>`;
+          return;
         }
-        await loadCostsTab();
-      } else {
-        showToast('Failed to save tariff configuration');
+        const sym = data.currency_symbol || '£';
+        const cand = data.candidate || {};
+        const base = data.baseline || {};
+        const diff = Number(data.diff_gbp || 0);
+        const annDiff = Number(data.annual_est_diff_gbp || 0);
+        const nDays = Number(data.days_count || 0);
+        const fmtMoney = (v) => `${v < 0 ? '-' : ''}${sym}${Math.abs(Number(v || 0)).toFixed(2)}`;
+        const diffColor = diff < 0 ? '#34D399' : (diff > 0 ? '#F87171' : 'var(--text-main)');
+        const diffLabel = diff < 0
+          ? `Saves ${sym}${Math.abs(diff).toFixed(2)} over ${nDays}d (est. ${sym}${Math.abs(annDiff).toFixed(2)}/yr)`
+          : (diff > 0
+            ? `Costs +${sym}${diff.toFixed(2)} more over ${nDays}d (est. +${sym}${annDiff.toFixed(2)}/yr)`
+            : 'Same net cost as your current tariff');
+
+        bodyEl.innerHTML = `
+          <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:8px; margin-bottom:8px;">
+            <div><span style="color:var(--text-muted);">Import Cost:</span> <strong style="color:#F87171;">${sym}${Number(cand.import_cost_gbp || 0).toFixed(2)}</strong></div>
+            <div><span style="color:var(--text-muted);">Export Earn:</span> <strong style="color:#34D399;">${sym}${Number(cand.export_income_gbp || 0).toFixed(2)}</strong></div>
+            <div><span style="color:var(--text-muted);">Standing:</span> <strong>${sym}${Number(cand.standing_charge_gbp || 0).toFixed(2)}</strong></div>
+            <div><span style="color:var(--text-muted);">Net Cost (${nDays}d):</span> <strong>${fmtMoney(cand.net_cost_gbp)}</strong></div>
+            <div><span style="color:var(--text-muted);">Avg / Day:</span> <strong>${fmtMoney(cand.avg_daily_net_gbp)}/d</strong></div>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; padding-top:6px; border-top:1px solid rgba(148,163,184,0.2);">
+            <span>vs Current Applied (${fmtMoney(base.net_cost_gbp)}): <strong style="color:${diffColor};">${diffLabel}</strong></span>
+            <span style="font-size:11px; color:var(--text-muted);">Preview only — not saved</span>
+          </div>
+        `;
+      } catch (err) {
+        if (bodyEl) bodyEl.innerHTML = '<span style="color:#F87171;">Error checking tariff</span>';
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    function openSaveTariffModal() {
+      const modal = document.getElementById('save-tariff-modal');
+      const dateInp = document.getElementById('save-tariff-effective-date');
+      const sumEl = document.getElementById('save-tariff-modal-summary');
+      const payload = _buildTariffConfigPayload();
+      const sub = payload.sub_unit_symbol || 'p';
+
+      if (dateInp && !dateInp.value) {
+        dateInp.value = _todayIso();
+      } else if (dateInp) {
+        dateInp.value = _todayIso();
+      }
+      if (sumEl) {
+        sumEl.innerHTML = `
+          <div><span style="color:#F87171;">⬇ Import:</span> ${_escapeHtml(_formatTariffSideSummary(payload.import_tariff, sub))}</div>
+          <div><span style="color:#34D399;">⬆ Export:</span> ${_escapeHtml(_formatTariffSideSummary(payload.export_tariff, sub))}</div>
+          <div><span style="color:var(--text-muted);">Standing Charge:</span> ${Number(payload.standing_charge_p || 0).toFixed(2)}${sub}/day</div>
+        `;
+      }
+      if (modal) modal.style.display = 'flex';
+    }
+
+    function closeSaveTariffModal() {
+      const modal = document.getElementById('save-tariff-modal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    async function confirmSaveNewTariff() {
+      const dateInp = document.getElementById('save-tariff-effective-date');
+      const effDate = (dateInp?.value || '').trim();
+      if (!effDate) {
+        showToast('Please select an effective date');
+        return;
+      }
+      const btn = document.getElementById('btn-confirm-save-tariff');
+      if (btn) btn.disabled = true;
+
+      try {
+        const payload = { ..._buildTariffConfigPayload(), effective_from: effDate };
+        const res = await fetch('/api/tariffs/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (res.ok && data.ok) {
+          closeSaveTariffModal();
+          const previewBox = document.getElementById('tariff-check-preview');
+          if (previewBox) previewBox.style.display = 'none';
+          if (data.sync_error) {
+            showToast(`Saved from ${effDate}, but Octopus sync failed: ${data.sync_error}`);
+          } else {
+            showToast(`New tariff saved (effective from ${effDate})`);
+          }
+          await loadCostsTab();
+        } else {
+          showToast(data.error || 'Failed to save tariff configuration');
+        }
+      } finally {
+        if (btn) btn.disabled = false;
       }
     }
 

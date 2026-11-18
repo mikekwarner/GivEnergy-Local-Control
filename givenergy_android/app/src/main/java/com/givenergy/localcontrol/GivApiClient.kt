@@ -165,6 +165,26 @@ class GivApiClient {
         }
     }
 
+    fun checkTariff(payload: JSONObject): JSONObject? {
+        if (activeBaseUrl.isBlank()) return null
+        val body = payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+        val req = buildAuthorizedRequest("/api/tariffs/check").post(body).build()
+        return apiHttp.newCall(req).execute().use { resp ->
+            val respBody = resp.body?.string() ?: return null
+            JSONObject(respBody)
+        }
+    }
+
+    fun deleteTariffHistory(entryId: String): JSONObject? {
+        if (activeBaseUrl.isBlank()) return null
+        val encoded = java.net.URLEncoder.encode(entryId, "UTF-8")
+        val req = buildAuthorizedRequest("/api/tariffs/history/$encoded").delete().build()
+        return apiHttp.newCall(req).execute().use { resp ->
+            val respBody = resp.body?.string() ?: return null
+            JSONObject(respBody)
+        }
+    }
+
     fun fetchSolarForecastData(pastDays: Int = 2, forecastDays: Int = 7): JSONObject? {
         if (activeBaseUrl.isBlank()) return null
         val req = buildAuthorizedRequest("/api/solar-forecast/data?past_days=$pastDays&forecast_days=$forecastDays").get().build()

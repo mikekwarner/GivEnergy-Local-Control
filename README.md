@@ -1,4 +1,4 @@
-# GivEnergy Local Control (`v1.6.0`)
+# GivEnergy Local Control (`v1.6.1`)
 
 Local, cloud-free monitoring, control, and historic telemetry server for **GivEnergy Hybrid Inverters, Batteries, and EV Chargers**, designed to run 24/7 on a **Raspberry Pi** (Pi 400, Pi 4, Pi 5, etc.) with a standalone **Windows Deployment Installer**.
 
@@ -14,19 +14,19 @@ Local, cloud-free monitoring, control, and historic telemetry server for **GivEn
 - **Historic Telemetry (Storage-Safe SQLite WAL)** — Configurable RAM-batched writes for MicroSD wear-protection (`60s` flush + volatile journald logs) or NVMe/USB SSD tuning (`15s` flush + `fstrim`), with **Days / Weeks / Months / Years** energy aggregation views and interactive bar-chart hover tooltips.
 - **Battery & BMS + Grid Voltage Views** — Per-cell voltage monitoring, BMS status, and grid voltage history charts.
 - **Auto-Discovery & Property Setup** — Automatically scans your local `/24` subnet for GivEnergy Inverters and EV Chargers on first setup and saves configuration to `property_config.json`.
-- **UK Energy Cost, Tariff Monitoring & What-If Comparison** — 3-tier tariff engine supporting Custom Flat/Dual/ToU rates, UK Supplier Presets (E.ON, EDF, British Gas, OVO, Octopus), and Octopus Energy's live half-hourly API with automatic regional Ofgem Price Cap comparison, a **Days / Weeks / Months / Years / All-Time** Cost & Export Ledger, and a **Tariff Comparison (What-If Calculator)** to compare UK presets and saved custom off-peak quotes against your active tariff.
+- **UK Energy Cost, Tariff History & What-If Comparison** — 3-tier tariff engine supporting Custom Flat/Dual/ToU rates, UK Supplier Presets (E.ON, EDF, British Gas, OVO, Octopus), and Octopus Energy's live half-hourly API with automatic regional Ofgem Price Cap comparison, **Check Tariff** non-destructive cost previews, **Save New Tariff** with effective-date tariff history (automatically calculating each historical timeframe with its active tariff and allowing removal of invalid entries), a **Days / Weeks / Months / Years / All-Time** Cost & Export Ledger, and a **Tariff Comparison (What-If Calculator)**.
 - **Solar Forecasting (Open-Meteo + Adaptive Efficiency Calibration)** — Hourly & daily solar PV yield forecasts using Open-Meteo Global Tilted Irradiance (`global_tilted_irradiance`), supporting primary and optional second split-roof arrays, Google Maps coordinate paste splitting, and an adaptive site efficiency factor that learns from actual PV telemetry to calibrate future trends. Available in the **☀ Solar Forecast** web tab and the **Solar** tab in the Android app.
 - **System Backup & Restore** — Portable `.zip` export and validated import of property, tariff, and solar forecast configurations plus the historic SQLite database for backups or Raspberry Pi hardware replacement.
 - **Raspberry Pi System & Maintenance Tab** — Displays detected Pi hardware model, CPU temperature, RAM/storage usage, one-click **GitHub App Updates** (with live progress and automatic service restart), OS software updates, reboot-required detection, and Restart / Shut Down actions.
 - **Optional Tailscale Remote Access & Funnel** — Guided Tailscale + Tailscale Funnel HTTPS setup with automatic Bearer Token authentication and QR code pairing for secure off-site and Android app access without router port-forwarding or running a VPN client on your phone.
-- **Android Companion App (`givenergy-local-control.apk`)** — Native Jetpack Compose Android app with live power flow, battery/BMS & grid voltage details, interactive historical time-series graphs, Open-Meteo solar forecast trends, UK energy cost & tariff ledger, one-scan QR pairing, and in-app GitHub release self-updates.
+- **Android Companion App (`givenergy-local-control.apk`)** — Native Jetpack Compose Android app with tabs aligned to the Web UI (**Live**, **History**, **Solar**, **Costs**, **Inverter**, **EV**, **System**), live power flow, battery/BMS & grid voltage details, interactive historical time-series graphs, Open-Meteo solar forecast trends, native UK tariff check/save-with-date & history management, one-scan QR pairing, and in-app GitHub release self-updates.
 - **Standalone Windows Installer (`GivEnergy-Local-Control-Installer.exe`)** — Full Pi software installation and configuration from the deployment PC with DPAPI-encrypted credential persistence.
 
 ---
 
 ## Quick Start (Windows)
 
-1. Download **`GivEnergy-Local-Control-Installer.exe`** from the [**v1.6.0 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v1.6.0).
+1. Download **`GivEnergy-Local-Control-Installer.exe`** from the [**v1.6.1 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v1.6.1).
 2. Double-click `GivEnergy-Local-Control-Installer.exe` and follow the 7-step wizard:
    - **Step 1:** Prepare a Raspberry Pi OS Lite SD/SSD card using Raspberry Pi Imager (auto-detected if installed).
    - **Step 2:** Auto-detect Raspberry Pis on your local network (also shows currently installed version & available upgrades).
@@ -40,7 +40,7 @@ Local, cloud-free monitoring, control, and historic telemetry server for **GivEn
 
 ## Android Companion App
 
-1. Download **`givenergy-local-control.apk`** from the [**v1.6.0 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v1.6.0) and install it on your Android phone (enable *Install unknown apps* if prompted).
+1. Download **`givenergy-local-control.apk`** from the [**v1.6.1 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v1.6.1) and install it on your Android phone (enable *Install unknown apps* if prompted).
 2. Enable **Tailscale Funnel** during Step 5 of the Windows Installer (or view your pairing details in the dashboard under **⚙ Property Setup → Remote Access**).
 3. Open **GivEnergy Local Control** on your phone and scan the **QR Code** (or paste your Funnel HTTPS URL and Bearer Token) to pair.
 

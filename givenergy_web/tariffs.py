@@ -9,6 +9,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -211,6 +212,16 @@ class TariffSideConfig:
 
 
 @dataclass
+class TariffHistoryEntry:
+    id: str
+    effective_from: str  # "YYYY-MM-DD"
+    standing_charge_p: float
+    import_tariff: TariffSideConfig
+    export_tariff: TariffSideConfig
+    created_at: str = ""
+
+
+@dataclass
 class TariffConfig:
     currency_symbol: str = "£"
     sub_unit_symbol: str = "p"
@@ -243,6 +254,7 @@ class TariffConfig:
     price_cap_updated_at: str = ""
     comparison_tariffs: list[dict[str, Any]] = field(default_factory=list)
     hidden_comparison_presets: list[str] = field(default_factory=list)
+    tariff_history: list[TariffHistoryEntry] = field(default_factory=list)
 
 
 def _side_from_dict(raw: dict[str, Any] | None, fallback: TariffSideConfig) -> TariffSideConfig:
@@ -271,6 +283,124 @@ def _side_from_dict(raw: dict[str, Any] | None, fallback: TariffSideConfig) -> T
     )
 
 
+def _history_entry_from_dict(raw: dict[str, Any] | None) -> TariffHistoryEntry | None:
+    if not isinstance(raw, dict):
+        return None
+    eff = str(raw.get("effective_from", "")).strip()[:10]
+    try:
+        datetime.strptime(eff, "%Y-%m-%d")
+    except ValueError:
+        return None
+    entry_id = str(raw.get("id", "")).strip() or uuid.uuid4().hex[:12]
+    return TariffHistoryEntry(
+        id=entry_id,
+        effective_from=eff,
+        standing_charge_p=float(raw.get("standing_charge_p", 60.0)),
+        import_tariff=_side_from_dict(raw.get("import_tariff"), TariffSideConfig()),
+        export_tariff=_side_from_dict(
+            raw.get("export_tariff"),
+            TariffSideConfig(
+                mode="preset",
+                preset_id="octopus_outgoing_fixed",
+                label="Outgoing Octopus Fixed (15.0p)",
+                default_rate_p=15.0,
+                windows=[],
+            ),
+        ),
+        created_at=str(raw.get("created_at", "")),
+    )
+
+
+def get_effective_tariff_for_date(
+    cfg: TariffConfig,
+    date_str: str | None = None,
+) -> tuple[TariffSideConfig, TariffSideConfig, float]:
+    """Return (import_tariff, export_tariff, standing_charge_p) effective on date_str (YYYY-MM-DD)."""
+    if not cfg.tariff_history:
+        return cfg.import_tariff, cfg.export_tariff, float(cfg.standing_charge_p)
+    target = (date_str or datetime.now().strftime("%Y-%m-%d"))[:10]
+    ordered = sorted(cfg.tariff_history, key=lambda e: e.effective_from)
+    selected = ordered[0]
+    for entry in ordered:
+        if entry.effective_from <= target:
+            selected = entry
+        else:
+            break
+    return selected.import_tariff, selected.export_tariff, float(selected.standing_charge_p)
+
+
+def sync_active_tariff_from_history(cfg: TariffConfig, today_str: str | None = None) -> None:
+    """Update cfg's top-level import/export/standing_charge fields to match today's effective tariff."""
+    if not cfg.tariff_history:
+        return
+    imp, exp, sc_p = get_effective_tariff_for_date(cfg, today_str)
+    cfg.import_tariff = imp
+    cfg.export_tariff = exp
+    cfg.standing_charge_p = float(sc_p)
+
+
+def upsert_tariff_history_entry(
+    cfg: TariffConfig,
+    effective_from: str,
+    standing_charge_p: float,
+    import_tariff: TariffSideConfig,
+    export_tariff: TariffSideConfig,
+    baseline_date: str = "1970-01-01",
+) -> TariffHistoryEntry:
+    """Add or replace a tariff history entry for effective_from, preserving any prior baseline."""
+    datetime.strptime(effective_from, "%Y-%m-%d")
+    if not cfg.tariff_history and effective_from > baseline_date:
+        cfg.tariff_history.append(
+            TariffHistoryEntry(
+                id=uuid.uuid4().hex[:12],
+                effective_from=baseline_date,
+                standing_charge_p=float(cfg.standing_charge_p),
+                import_tariff=_side_from_dict(asdict(cfg.import_tariff), TariffSideConfig()),
+                export_tariff=_side_from_dict(asdict(cfg.export_tariff), TariffSideConfig()),
+                created_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            )
+        )
+
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    existing = next((e for e in cfg.tariff_history if e.effective_from == effective_from), None)
+    if existing is not None:
+        existing.standing_charge_p = float(standing_charge_p)
+        existing.import_tariff = import_tariff
+        existing.export_tariff = export_tariff
+        existing.created_at = now_iso
+        entry = existing
+    else:
+        entry = TariffHistoryEntry(
+            id=uuid.uuid4().hex[:12],
+            effective_from=effective_from,
+            standing_charge_p=float(standing_charge_p),
+            import_tariff=import_tariff,
+            export_tariff=export_tariff,
+            created_at=now_iso,
+        )
+        cfg.tariff_history.append(entry)
+
+    cfg.tariff_history.sort(key=lambda e: e.effective_from)
+    sync_active_tariff_from_history(cfg)
+    return entry
+
+
+def remove_tariff_history_entry(cfg: TariffConfig, entry_id: str) -> bool:
+    """Remove a tariff history entry by ID (except the original/first entry) and resync the active tariff."""
+    if not cfg.tariff_history:
+        return False
+    ordered = sorted(cfg.tariff_history, key=lambda e: e.effective_from)
+    if ordered[0].id == entry_id:
+        return False
+    before = len(cfg.tariff_history)
+    cfg.tariff_history = [e for e in cfg.tariff_history if e.id != entry_id]
+    if len(cfg.tariff_history) == before:
+        return False
+    cfg.tariff_history.sort(key=lambda e: e.effective_from)
+    sync_active_tariff_from_history(cfg)
+    return True
+
+
 def load_tariff_config(path: Path) -> TariffConfig:
     cfg = TariffConfig()
     if not path.exists():
@@ -282,7 +412,14 @@ def load_tariff_config(path: Path) -> TariffConfig:
         region = str(raw.get("region", cfg.region)).upper()
         if region not in UK_GSP_REGIONS:
             region = "H"
-        return TariffConfig(
+        history: list[TariffHistoryEntry] = []
+        for item in raw.get("tariff_history") or []:
+            parsed = _history_entry_from_dict(item)
+            if parsed is not None:
+                history.append(parsed)
+        history.sort(key=lambda e: e.effective_from)
+
+        loaded = TariffConfig(
             currency_symbol=str(raw.get("currency_symbol", "£")) or "£",
             sub_unit_symbol=str(raw.get("sub_unit_symbol", "p")) or "p",
             region=region,
@@ -298,7 +435,10 @@ def load_tariff_config(path: Path) -> TariffConfig:
             price_cap_updated_at=str(raw.get("price_cap_updated_at", "")),
             comparison_tariffs=[t for t in (raw.get("comparison_tariffs") or []) if isinstance(t, dict)],
             hidden_comparison_presets=[str(x) for x in (raw.get("hidden_comparison_presets") or [])],
+            tariff_history=history,
         )
+        sync_active_tariff_from_history(loaded)
+        return loaded
     except Exception:
         return cfg
 
@@ -683,26 +823,28 @@ def _slot_rate_for_epoch(
 def get_current_rates(cfg: TariffConfig, cache: TariffRateCache) -> dict[str, Any]:
     """Return the active import & export rates (p/kWh) right now."""
     now_ep = int(time.time())
+    today_str = datetime.fromtimestamp(now_ep).strftime("%Y-%m-%d")
+    imp_tariff, exp_tariff, sc_p = get_effective_tariff_for_date(cfg, today_str)
     imp_slots = (
-        cache.get_slots(cfg.import_tariff.octopus_tariff_code, now_ep - 3600, now_ep + 3600)
-        if cfg.import_tariff.mode == "octopus_api"
+        cache.get_slots(imp_tariff.octopus_tariff_code, now_ep - 3600, now_ep + 3600)
+        if imp_tariff.mode == "octopus_api"
         else []
     )
     exp_slots = (
-        cache.get_slots(cfg.export_tariff.octopus_tariff_code, now_ep - 3600, now_ep + 3600)
-        if cfg.export_tariff.mode == "octopus_api"
+        cache.get_slots(exp_tariff.octopus_tariff_code, now_ep - 3600, now_ep + 3600)
+        if exp_tariff.mode == "octopus_api"
         else []
     )
-    imp_rate, _ = _slot_rate_for_epoch(cfg.import_tariff, now_ep, imp_slots)
-    exp_rate, _ = _slot_rate_for_epoch(cfg.export_tariff, now_ep, exp_slots)
+    imp_rate, _ = _slot_rate_for_epoch(imp_tariff, now_ep, imp_slots)
+    exp_rate, _ = _slot_rate_for_epoch(exp_tariff, now_ep, exp_slots)
     return {
         "import_rate_p": round(imp_rate, 2),
         "export_rate_p": round(exp_rate, 2),
-        "standing_charge_p": round(cfg.standing_charge_p, 2),
-        "import_label": cfg.import_tariff.label,
-        "import_description": cfg.import_tariff.description,
-        "export_label": cfg.export_tariff.label,
-        "export_description": cfg.export_tariff.description,
+        "standing_charge_p": round(sc_p, 2),
+        "import_label": imp_tariff.label,
+        "import_description": imp_tariff.description,
+        "export_label": exp_tariff.label,
+        "export_description": exp_tariff.description,
         "currency_symbol": cfg.currency_symbol,
         "sub_unit_symbol": cfg.sub_unit_symbol,
     }
@@ -723,6 +865,7 @@ def calculate_intraday_costs(
 ) -> dict[str, Any]:
     """Compute half-hourly / hourly cost breakdown for a given date (defaults to today)."""
     target_date = date_str or datetime.now().strftime("%Y-%m-%d")
+    imp_tariff, exp_tariff, sc_p = get_effective_tariff_for_date(cfg, target_date)
     series = db.get_intraday_series(target_date)
 
     dt_start = datetime.strptime(target_date, "%Y-%m-%d")
@@ -730,13 +873,13 @@ def calculate_intraday_costs(
     end_ep = int((dt_start + timedelta(days=1)).timestamp())
 
     imp_slots = (
-        cache.get_slots(cfg.import_tariff.octopus_tariff_code, start_ep, end_ep)
-        if cfg.import_tariff.mode == "octopus_api"
+        cache.get_slots(imp_tariff.octopus_tariff_code, start_ep, end_ep)
+        if imp_tariff.mode == "octopus_api"
         else []
     )
     exp_slots = (
-        cache.get_slots(cfg.export_tariff.octopus_tariff_code, start_ep, end_ep)
-        if cfg.export_tariff.mode == "octopus_api"
+        cache.get_slots(exp_tariff.octopus_tariff_code, start_ep, end_ep)
+        if exp_tariff.mode == "octopus_api"
         else []
     )
 
@@ -746,8 +889,8 @@ def calculate_intraday_costs(
         hh = (slot_i * 30) // 60
         mm = (slot_i * 30) % 60
         slot_ep = start_ep + slot_i * 1800
-        imp_r, _ = _slot_rate_for_epoch(cfg.import_tariff, slot_ep, imp_slots)
-        exp_r, _ = _slot_rate_for_epoch(cfg.export_tariff, slot_ep, exp_slots)
+        imp_r, _ = _slot_rate_for_epoch(imp_tariff, slot_ep, imp_slots)
+        exp_r, _ = _slot_rate_for_epoch(exp_tariff, slot_ep, exp_slots)
         buckets.append(
             {
                 "time": f"{hh:02d}:{mm:02d}",
@@ -790,8 +933,8 @@ def calculate_intraday_costs(
         imp_kwh = (imp_w * dt_hours) / 1000.0
         exp_kwh = (exp_w * dt_hours) / 1000.0
 
-        imp_r, imp_idx = _slot_rate_for_epoch(cfg.import_tariff, ep, imp_slots, imp_idx)
-        exp_r, exp_idx = _slot_rate_for_epoch(cfg.export_tariff, ep, exp_slots, exp_idx)
+        imp_r, imp_idx = _slot_rate_for_epoch(imp_tariff, ep, imp_slots, imp_idx)
+        exp_r, exp_idx = _slot_rate_for_epoch(exp_tariff, ep, exp_slots, exp_idx)
 
         imp_cost_p = imp_kwh * imp_r
         exp_inc_p = exp_kwh * exp_r
@@ -821,8 +964,8 @@ def calculate_intraday_costs(
             "export_kwh": round(total_exp_kwh, 2),
             "import_cost_gbp": round(total_imp_p / 100.0, 2),
             "export_income_gbp": round(total_exp_p / 100.0, 2),
-            "standing_charge_gbp": round(cfg.standing_charge_p / 100.0, 2),
-            "net_cost_gbp": round((total_imp_p + cfg.standing_charge_p - total_exp_p) / 100.0, 2),
+            "standing_charge_gbp": round(sc_p / 100.0, 2),
+            "net_cost_gbp": round((total_imp_p + sc_p - total_exp_p) / 100.0, 2),
         },
     }
 
@@ -860,16 +1003,14 @@ def calculate_daily_costs(
     start_ep = int(datetime.strptime(oldest_date, "%Y-%m-%d").timestamp())
     end_ep = int((datetime.strptime(newest_date, "%Y-%m-%d") + timedelta(days=1)).timestamp())
 
-    imp_slots = (
-        cache.get_slots(cfg.import_tariff.octopus_tariff_code, start_ep, end_ep)
-        if cfg.import_tariff.mode == "octopus_api"
-        else []
-    )
-    exp_slots = (
-        cache.get_slots(cfg.export_tariff.octopus_tariff_code, start_ep, end_ep)
-        if cfg.export_tariff.mode == "octopus_api"
-        else []
-    )
+    slots_by_code: dict[str, list[tuple[int, int, float]]] = {}
+    tariff_sides_to_check: list[TariffSideConfig] = [cfg.import_tariff, cfg.export_tariff]
+    for entry in cfg.tariff_history:
+        tariff_sides_to_check.append(entry.import_tariff)
+        tariff_sides_to_check.append(entry.export_tariff)
+    for side in tariff_sides_to_check:
+        if side.mode == "octopus_api" and side.octopus_tariff_code and side.octopus_tariff_code not in slots_by_code:
+            slots_by_code[side.octopus_tariff_code] = cache.get_slots(side.octopus_tariff_code, start_ep, end_ep)
 
     # Pull 5m telemetry across recent range (capped at 90d for fast all-time aggregation)
     series_days = 90 if days <= 0 else min(max(days + 1, 2), 90)
@@ -879,9 +1020,6 @@ def calculate_daily_costs(
         d = row.get("date_str")
         if d:
             by_date.setdefault(d, []).append(row)
-
-    avg_imp_fallback = _avg_window_rate(cfg.import_tariff)
-    avg_exp_fallback = _avg_window_rate(cfg.export_tariff)
 
     daily_rows: list[dict[str, Any]] = []
     tot_imp_kwh = 0.0
@@ -895,6 +1033,12 @@ def calculate_daily_costs(
 
     for s in summaries:
         d_str = s["date_str"]
+        imp_tariff, exp_tariff, day_sc_p = get_effective_tariff_for_date(cfg, d_str)
+        avg_imp_fallback = _avg_window_rate(imp_tariff)
+        avg_exp_fallback = _avg_window_rate(exp_tariff)
+        imp_slots = slots_by_code.get(imp_tariff.octopus_tariff_code, []) if imp_tariff.mode == "octopus_api" else []
+        exp_slots = slots_by_code.get(exp_tariff.octopus_tariff_code, []) if exp_tariff.mode == "octopus_api" else []
+
         ledger_imp_kwh = float(s.get("grid_import_kwh", 0.0) or 0.0)
         ledger_exp_kwh = float(s.get("grid_export_kwh", 0.0) or 0.0)
         self_kwh = float(s.get("self_consumption_kwh", 0.0) or 0.0)
@@ -923,8 +1067,8 @@ def calculate_daily_costs(
                 gw = float(r.get("grid_w", r.get("grid_w_avg", 0)) or 0)
                 ik = (max(0.0, -gw) * dt_h) / 1000.0
                 ek = (max(0.0, gw) * dt_h) / 1000.0
-                ir, imp_idx = _slot_rate_for_epoch(cfg.import_tariff, ep, imp_slots, imp_idx)
-                er, exp_idx = _slot_rate_for_epoch(cfg.export_tariff, ep, exp_slots, exp_idx)
+                ir, imp_idx = _slot_rate_for_epoch(imp_tariff, ep, imp_slots, imp_idx)
+                er, exp_idx = _slot_rate_for_epoch(exp_tariff, ep, exp_slots, exp_idx)
                 raw_imp_kwh += ik
                 raw_exp_kwh += ek
                 raw_imp_p += ik * ir
@@ -938,7 +1082,7 @@ def calculate_daily_costs(
 
         imp_cost_gbp = (ledger_imp_kwh * eff_imp_rate) / 100.0
         exp_inc_gbp = (ledger_exp_kwh * eff_exp_rate) / 100.0
-        sc_gbp = cfg.standing_charge_p / 100.0
+        sc_gbp = day_sc_p / 100.0
         net_gbp = imp_cost_gbp + sc_gbp - exp_inc_gbp
         savings_gbp = (self_kwh * eff_imp_rate) / 100.0
 

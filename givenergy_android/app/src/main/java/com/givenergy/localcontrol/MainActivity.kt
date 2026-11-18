@@ -145,18 +145,6 @@ class MainActivity : ComponentActivity() {
                             label = { Text("Live", maxLines = 1, softWrap = false) },
                         )
                         NavigationBarItem(
-                            selected = selectedTab == 1,
-                            onClick = { selectedTab = 1 },
-                            icon = { Icon(Icons.Default.Tune, contentDescription = "Inverter") },
-                            label = { Text("Inverter", maxLines = 1, softWrap = false) },
-                        )
-                        NavigationBarItem(
-                            selected = selectedTab == 5,
-                            onClick = { selectedTab = 5 },
-                            icon = { Icon(Icons.Default.EvStation, contentDescription = "EV") },
-                            label = { Text("EV", maxLines = 1, softWrap = false) },
-                        )
-                        NavigationBarItem(
                             selected = selectedTab == 2,
                             onClick = {
                                 selectedTab = 2
@@ -182,6 +170,18 @@ class MainActivity : ComponentActivity() {
                             },
                             icon = { Icon(Icons.Default.CurrencyPound, contentDescription = "Costs") },
                             label = { Text("Costs", maxLines = 1, softWrap = false) },
+                        )
+                        NavigationBarItem(
+                            selected = selectedTab == 1,
+                            onClick = { selectedTab = 1 },
+                            icon = { Icon(Icons.Default.Tune, contentDescription = "Inverter") },
+                            label = { Text("Inverter", maxLines = 1, softWrap = false) },
+                        )
+                        NavigationBarItem(
+                            selected = selectedTab == 5,
+                            onClick = { selectedTab = 5 },
+                            icon = { Icon(Icons.Default.EvStation, contentDescription = "EV") },
+                            label = { Text("EV", maxLines = 1, softWrap = false) },
                         )
                         NavigationBarItem(
                             selected = selectedTab == 3,
@@ -275,6 +275,91 @@ class MainActivity : ComponentActivity() {
                                 if (base.isNotBlank()) {
                                     startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("$base/?tab=costs")))
                                 }
+                            },
+                            onCheckTariff = { region, postcode, scP, imp, exp, days ->
+                                uiState = uiState.copy(
+                                    tariffEditor = uiState.tariffEditor.copy(checkInProgress = true),
+                                )
+                                thread {
+                                    val payload = org.json.JSONObject().apply {
+                                        put("currency_symbol", uiState.tariffEditor.currencySymbol)
+                                        put("sub_unit_symbol", uiState.tariffEditor.subUnitSymbol)
+                                        put("region", region)
+                                        put("postcode", postcode)
+                                        put("standing_charge_p", scP)
+                                        put("import_tariff", imp.toJson())
+                                        put("export_tariff", exp.toJson())
+                                        put("days", days)
+                                    }
+                                    val res = runCatching { apiClient.checkTariff(payload) }.getOrNull()
+                                    val parsed = if (res != null) {
+                                        PlantJsonParser.parseTariffCheckResult(res)
+                                    } else {
+                                        TariffCheckResult(error = "Failed to reach server")
+                                    }
+                                    runOnUiThread {
+                                        uiState = uiState.copy(
+                                            tariffEditor = uiState.tariffEditor.copy(
+                                                checkInProgress = false,
+                                                checkResult = parsed,
+                                            ),
+                                        )
+                                    }
+                                }
+                            },
+                            onSaveNewTariff = { region, postcode, scP, imp, exp, effectiveFrom ->
+                                uiState = uiState.copy(
+                                    tariffEditor = uiState.tariffEditor.copy(savingInProgress = true),
+                                )
+                                thread {
+                                    val payload = org.json.JSONObject().apply {
+                                        put("currency_symbol", uiState.tariffEditor.currencySymbol)
+                                        put("sub_unit_symbol", uiState.tariffEditor.subUnitSymbol)
+                                        put("region", region)
+                                        put("postcode", postcode)
+                                        put("standing_charge_p", scP)
+                                        put("import_tariff", imp.toJson())
+                                        put("export_tariff", exp.toJson())
+                                        put("effective_from", effectiveFrom)
+                                    }
+                                    val res = runCatching { apiClient.saveTariffConfig(payload) }.getOrNull()
+                                    val ok = res?.optBoolean("ok", false) == true
+                                    runOnUiThread {
+                                        uiState = uiState.copy(
+                                            tariffEditor = uiState.tariffEditor.copy(
+                                                savingInProgress = false,
+                                                checkResult = if (ok) null else uiState.tariffEditor.checkResult,
+                                            ),
+                                        )
+                                        scope.launch {
+                                            snackbarHostState.showSnackbar(
+                                                if (ok) "New tariff saved (from $effectiveFrom)"
+                                                else (res?.optString("error") ?: "Failed to save tariff")
+                                            )
+                                        }
+                                        if (ok) loadCostsAsync(uiState.costSummary.selectedPeriod)
+                                    }
+                                }
+                            },
+                            onRemoveTariffHistory = { entryId ->
+                                thread {
+                                    val res = runCatching { apiClient.deleteTariffHistory(entryId) }.getOrNull()
+                                    val ok = res?.optBoolean("ok", false) == true
+                                    runOnUiThread {
+                                        scope.launch {
+                                            snackbarHostState.showSnackbar(
+                                                if (ok) "Applied tariff removed"
+                                                else (res?.optString("error") ?: "Failed to remove tariff")
+                                            )
+                                        }
+                                        if (ok) loadCostsAsync(uiState.costSummary.selectedPeriod)
+                                    }
+                                }
+                            },
+                            onDismissCheckPreview = {
+                                uiState = uiState.copy(
+                                    tariffEditor = uiState.tariffEditor.copy(checkResult = null),
+                                )
                             },
                         )
                         3 -> SystemScreen(
@@ -452,11 +537,21 @@ class MainActivity : ComponentActivity() {
             try {
                 val daysParam = if (period == "days") 30 else 0
                 val costJson = apiClient.fetchCostSummary(daysParam, period)
-                if (costJson != null) {
-                    val parsed = PlantJsonParser.parseCostSummary(costJson)
-                    runOnUiThread {
-                        uiState = uiState.copy(costSummary = parsed)
-                    }
+                val parsedCost = if (costJson != null) PlantJsonParser.parseCostSummary(costJson) else null
+
+                val cfgJson = apiClient.fetchTariffConfig()
+                val presetsJson = if (uiState.tariffEditor.importPresets.isEmpty()) apiClient.fetchTariffPresets() else null
+                val octJson = if (uiState.tariffEditor.octopusImportProducts.isEmpty()) runCatching { apiClient.fetchOctopusProducts() }.getOrNull() else null
+
+                runOnUiThread {
+                    var nextEditor = uiState.tariffEditor
+                    if (presetsJson != null) nextEditor = PlantJsonParser.parseTariffPresets(presetsJson, nextEditor)
+                    if (octJson != null) nextEditor = PlantJsonParser.parseOctopusProducts(octJson, nextEditor)
+                    if (cfgJson != null) nextEditor = PlantJsonParser.parseTariffConfig(cfgJson, nextEditor)
+                    uiState = uiState.copy(
+                        costSummary = parsedCost ?: uiState.costSummary,
+                        tariffEditor = nextEditor,
+                    )
                 }
             } catch (_: Exception) {
             }

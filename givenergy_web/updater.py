@@ -17,7 +17,7 @@ import urllib.request
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 GITHUB_OWNER = "mikekwarner"
 GITHUB_REPO = "GivEnergy-Local-Control"
@@ -171,7 +171,11 @@ def _find_extracted_package(extract_root: Path) -> Path | None:
     return None
 
 
-def _run_app_update_bg(app_dir: Path, current_version: str) -> None:
+def _run_app_update_bg(
+    app_dir: Path,
+    current_version: str,
+    restart_cb: Callable[[], None] | None = None,
+) -> None:
     try:
         _append_log(
             f"=== Checking GitHub ({GITHUB_OWNER}/{GITHUB_REPO}@{GITHUB_BRANCH}) ===",
@@ -278,7 +282,8 @@ def _run_app_update_bg(app_dir: Path, current_version: str) -> None:
                 "restarting": True,
             })
 
-        threading.Thread(target=_trigger_service_restart, daemon=True).start()
+        target_restart = restart_cb or _trigger_service_restart
+        threading.Thread(target=target_restart, daemon=True).start()
     except Exception as exc:
         with _app_update_lock:
             _app_update_state.update({
@@ -292,7 +297,11 @@ def _run_app_update_bg(app_dir: Path, current_version: str) -> None:
             })
 
 
-def start_app_update(app_dir: Path, current_version: str) -> dict[str, Any]:
+def start_app_update(
+    app_dir: Path,
+    current_version: str,
+    restart_cb: Callable[[], None] | None = None,
+) -> dict[str, Any]:
     """Start the GitHub app update in a background thread if not already running."""
     with _app_update_lock:
         if _app_update_state["running"]:
@@ -308,7 +317,11 @@ def start_app_update(app_dir: Path, current_version: str) -> dict[str, Any]:
             "restarting": False,
             "output": "",
         })
-        t = threading.Thread(target=_run_app_update_bg, args=(app_dir, current_version), daemon=True)
+        t = threading.Thread(
+            target=_run_app_update_bg,
+            args=(app_dir, current_version, restart_cb),
+            daemon=True,
+        )
         t.start()
         return {"ok": True, "started": True}
 

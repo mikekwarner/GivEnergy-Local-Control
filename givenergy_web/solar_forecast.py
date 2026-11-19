@@ -13,6 +13,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from givenergy_web.db_utils import open_sqlite
+
 OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 
 
@@ -195,12 +197,7 @@ class SolarForecastStore:
         self._init_schema()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.db_path), timeout=15.0)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA synchronous=NORMAL;")
-        conn.execute("PRAGMA temp_store=MEMORY;")
-        return conn
+        return open_sqlite(self.db_path, timeout=15.0, temp_store_memory=True)
 
     def _init_schema(self) -> None:
         with self._lock:

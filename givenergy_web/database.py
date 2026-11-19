@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from givenergy_web.db_utils import open_sqlite
 from givenergy_web.models import PlantSnapshot
 
 
@@ -47,13 +48,7 @@ class HistoricDatabase:
         self._seed_live_ring()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.db_path), timeout=15.0)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA synchronous=NORMAL;")
-        conn.execute("PRAGMA temp_store=MEMORY;")
-        conn.execute("PRAGMA cache_size=-8000;")  # ~8MB page cache in RAM
-        return conn
+        return open_sqlite(self.db_path, timeout=15.0, temp_store_memory=True, cache_size_kb=8000)
 
     def _init_schema(self) -> None:
         with self._lock:

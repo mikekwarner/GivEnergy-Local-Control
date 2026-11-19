@@ -23,7 +23,9 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QFrame,
     QGraphicsOpacityEffect,
@@ -48,6 +50,7 @@ from PySide6.QtWidgets import (
 
 import deploy_to_pi
 import setup_pi
+import uninstall_pi
 from givenergy_web import __version__ as APP_VERSION
 from givenergy_web.tariffs import (
     UK_GSP_REGIONS,
@@ -306,6 +309,7 @@ async def _scan_lan_for_pis() -> tuple[str, list[dict]]:
                 "mac": mac or "—",
                 "is_rpi": is_rpi_mac or is_givenergy,
                 "has_ssh": has_ssh,
+                "has_http": has_http,
                 "is_givenergy": is_givenergy,
                 "installed_version": installed_version,
                 "upgrade_needed": upgrade_needed,
@@ -730,6 +734,7 @@ class DiscoverPiPage(QWizardPage):
         self.setTitle("Step 2: Auto-Detect Raspberry Pis on Local Network")
         self.setSubTitle("Select a detected Raspberry Pi below, or enter an IP address manually to continue.")
         self._worker: NetworkScanWorker | None = None
+        self._scan_results_by_ip: dict[str, dict] = {}
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
@@ -771,13 +776,64 @@ class DiscoverPiPage(QWizardPage):
         self.selected_ip_edit.setPlaceholderText("Selected IP (or enter an IP address manually)")
         self.registerField("detected_ip", self.selected_ip_edit)
         self.selected_ip_edit.textChanged.connect(lambda: self.completeChanged.emit())
+        self.selected_ip_edit.textChanged.connect(self._update_uninstall_button)
         row_sel = QHBoxLayout()
         row_sel.addWidget(QLabel("Selected Target IP:"))
         row_sel.addWidget(self.selected_ip_edit, 1)
+        self.btn_uninstall = QPushButton("🗑 Uninstall from Pi...")
+        self.btn_uninstall.setFixedHeight(34)
+        self.btn_uninstall.setVisible(False)
+        self.btn_uninstall.setToolTip("Back up and completely remove GivEnergy Local Control from the selected Raspberry Pi")
+        self.btn_uninstall.clicked.connect(self._open_uninstaller)
+        row_sel.addWidget(self.btn_uninstall)
         layout.addLayout(row_sel)
 
     def isComplete(self) -> bool:
         return bool(self.selected_ip_edit.text().strip())
+
+    def validatePage(self) -> bool:
+        ip = self.selected_ip_edit.text().strip()
+        item = self._scan_results_by_ip.get(ip)
+        if item is not None:
+            warnings: list[str] = []
+            if not item.get("has_ssh"):
+                warnings.append("• SSH (port 22) is not open on this device.")
+            if not item.get("is_rpi"):
+                warnings.append(
+                    f"• This device does not appear to be a Raspberry Pi ({item.get('info', 'SSH Host')}, MAC: {item.get('mac', '—')})."
+                )
+            if item.get("has_http") and not item.get("is_givenergy"):
+                warnings.append(
+                    "• Port 80 is already in use by another web service on this device, which may conflict with the dashboard."
+                )
+            if warnings:
+                ans = QMessageBox.warning(
+                    self,
+                    "Target Device Warning",
+                    f"Device {ip} raised the following warning(s):\n\n"
+                    + "\n".join(warnings)
+                    + "\n\nDo you still want to select this device?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No,
+                )
+                if ans != QMessageBox.Yes:
+                    return False
+                if self.wizard() is not None:
+                    self.wizard().setProperty("preflight_confirmed_ip", ip)
+            elif self.wizard() is not None:
+                self.wizard().setProperty("preflight_confirmed_ip", "")
+        return super().validatePage()
+
+    def _update_uninstall_button(self) -> None:
+        ip = self.selected_ip_edit.text().strip()
+        item = self._scan_results_by_ip.get(ip)
+        self.btn_uninstall.setVisible(bool(item and item.get("is_givenergy")))
+
+    def _open_uninstaller(self) -> None:
+        ip = self.selected_ip_edit.text().strip()
+        dlg = UninstallPiDialog(initial_ip=ip, parent=self)
+        if dlg.exec() == QDialog.Accepted and dlg.uninstalled:
+            self.start_scan()
 
     def initializePage(self) -> None:
         self.completeChanged.emit()
@@ -807,6 +863,7 @@ class DiscoverPiPage(QWizardPage):
         self.scan_progress.hide()
         self.btn_scan.setText("🔍 Scan Network for Pis")
         self.btn_scan.setEnabled(True)
+        self._scan_results_by_ip = {item["ip"]: item for item in results}
         self.table.setRowCount(len(results))
         for r, item in enumerate(results):
             vals = [
@@ -826,6 +883,7 @@ class DiscoverPiPage(QWizardPage):
         self.lbl_status.setText(f"Scanned {subnet} — found {len(results)} candidate device(s).")
         if results and not self.selected_ip_edit.text().strip():
             self.table.selectRow(0)
+        self._update_uninstall_button()
 
     def _on_scan_failed(self, err: str) -> None:
         self.scan_progress.hide()
@@ -1097,11 +1155,108 @@ class CredentialsPage(QWizardPage):
     def isComplete(self) -> bool:
         return bool(self.inp_host.text().strip() and self.inp_user.text().strip() and self.inp_pass.text())
 
+    def _run_target_preflight(self, host: str, user: str, pw: str) -> bool:
+        """Verify target OS, systemd, apt-get, Python 3.10+, and port 80 availability before deploying."""
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        try:
+            ssh.connect(host, username=user, password=pw, timeout=8.0)
+            cmd = (
+                "echo OS=$(uname -s 2>/dev/null || echo unknown); "
+                "echo SYSCTL=$(command -v systemctl >/dev/null 2>&1 && echo 1 || echo 0); "
+                "echo APT=$(command -v apt-get >/dev/null 2>&1 && echo 1 || echo 0); "
+                "echo PY=$(python3 -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")' 2>/dev/null || echo none); "
+                "echo MODEL=$(cat /proc/device-tree/model 2>/dev/null | tr -d '\\0' || true); "
+                "echo GIV=$(systemctl is-active givenergy-web.service 2>/dev/null || echo inactive); "
+                "echo P80=$( (ss -tln 2>/dev/null || netstat -tln 2>/dev/null) | grep -E '(:|\\.)80[[:space:]]' | head -n 1 || true )"
+            )
+            _, stdout, _ = ssh.exec_command(cmd, timeout=8.0)
+            raw = stdout.read().decode("utf-8", errors="replace")
+        except Exception as exc:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.critical(
+                self,
+                "SSH Connection Failed",
+                f"Could not connect to {user}@{host}:\n{exc}",
+            )
+            return False
+        finally:
+            ssh.close()
+            QApplication.restoreOverrideCursor()
+
+        info: dict[str, str] = {}
+        for line in raw.splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                info[k.strip()] = v.strip()
+
+        errors: list[str] = []
+        if info.get("OS") != "Linux":
+            errors.append(f"• Unsupported OS: {info.get('OS', 'unknown')} (Linux required).")
+        if info.get("SYSCTL") != "1":
+            errors.append("• systemd (systemctl) was not found on this device.")
+        if info.get("APT") != "1":
+            errors.append("• apt-get was not found (Debian / Raspberry Pi OS required).")
+
+        py_ver = info.get("PY", "none")
+        py_ok = False
+        if "." in py_ver:
+            try:
+                maj, min_v = (int(x) for x in py_ver.split(".", 1))
+                py_ok = (maj, min_v) >= (3, 10)
+            except ValueError:
+                py_ok = False
+        if not py_ok:
+            errors.append(f"• Python 3.10+ is required (found: {py_ver}).")
+
+        if errors:
+            QMessageBox.critical(
+                self,
+                "Incompatible Target Device",
+                f"Cannot deploy GivEnergy Local Control to {host}:\n\n" + "\n".join(errors),
+            )
+            return False
+
+        warnings: list[str] = []
+        model = info.get("MODEL", "")
+        if "raspberry pi" not in model.lower():
+            label = model or "generic Linux host"
+            warnings.append(f"• Hardware does not appear to be a Raspberry Pi ({label}).")
+
+        if info.get("P80") and info.get("GIV") != "active":
+            warnings.append(
+                "• Port 80 is already in use by another service on this device, which may prevent the web dashboard from starting."
+            )
+
+        already_confirmed = (
+            self.wizard() is not None
+            and self.wizard().property("preflight_confirmed_ip") == host
+        )
+        if warnings and not already_confirmed:
+            ans = QMessageBox.warning(
+                self,
+                "Target Device Warning",
+                f"Pre-flight check on {host} raised the following warning(s):\n\n"
+                + "\n".join(warnings)
+                + "\n\nDo you still want to proceed with deployment?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            return ans == QMessageBox.Yes
+
+        return True
+
     def validatePage(self) -> bool:
+        host = self.inp_host.text().strip()
+        user = self.inp_user.text().strip()
+        pw = self.inp_pass.text()
+        if not self._run_target_preflight(host, user, pw):
+            return False
         _save_wizard_config(
-            host=self.inp_host.text(),
-            user=self.inp_user.text(),
-            password=self.inp_pass.text(),
+            host=host,
+            user=user,
+            password=pw,
             install_tailscale=self.chk_tailscale.isChecked(),
             storage_mode=self.cmb_storage.currentData() or "sd",
             remember=self.chk_remember.isChecked(),
@@ -2226,6 +2381,189 @@ class FinishPage(QWizardPage):
         if tab:
             url = f"{url}/?tab={tab}"
         QDesktopServices.openUrl(QUrl(url))
+
+
+class UninstallWorker(QThread):
+    log_line = Signal(str)
+    finished_uninstall = Signal(bool, str)
+
+    def __init__(
+        self,
+        host: str,
+        user: str,
+        password: str,
+        backup_path: Path | None,
+        reset_tailscale: bool,
+    ) -> None:
+        super().__init__()
+        self.host = host
+        self.user = user
+        self.password = password
+        self.backup_path = backup_path
+        self.reset_tailscale = reset_tailscale
+
+    def run(self) -> None:
+        try:
+            if self.backup_path is not None:
+                self.log_line.emit("=== Step 1/2: Taking Backup Before Uninstall ===")
+                uninstall_pi.backup_from_pi(
+                    self.host,
+                    self.user,
+                    self.password,
+                    self.backup_path,
+                    log_cb=self.log_line.emit,
+                )
+            self.log_line.emit("=== Step 2/2: Removing GivEnergy Local Control from Raspberry Pi ===")
+            uninstall_pi.uninstall_from_pi(
+                self.host,
+                self.user,
+                self.password,
+                reset_tailscale_funnel=self.reset_tailscale,
+                log_cb=self.log_line.emit,
+            )
+            self.finished_uninstall.emit(True, "Uninstall completed successfully.")
+        except Exception as exc:
+            self.log_line.emit(f"[ERROR] {exc}")
+            self.finished_uninstall.emit(False, str(exc))
+
+
+class UninstallPiDialog(QDialog):
+    def __init__(self, initial_ip: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Uninstall GivEnergy Local Control from Raspberry Pi")
+        self.resize(560, 440)
+        self.uninstalled = False
+        self._worker: UninstallWorker | None = None
+
+        saved = _load_wizard_config()
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        intro = QLabel(
+            "This will stop and remove <b>givenergy-web.service</b>, remove system service rules, "
+            "and delete <code>/opt/givenergy-web</code> from the target Raspberry Pi."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        form = QFormLayout()
+        self.ip_edit = QLineEdit(initial_ip or str(saved.get("pi_host", "")))
+        self.ip_edit.setPlaceholderText("e.g. 192.168.1.50")
+        self.user_edit = QLineEdit(str(saved.get("pi_user", "pi") or "pi"))
+        self.pass_edit = QLineEdit(str(saved.get("pi_pass", "")))
+        self.pass_edit.setEchoMode(QLineEdit.Password)
+        self.chk_reset_ts = QCheckBox("Also reset Tailscale Funnel configuration on the Pi")
+        form.addRow("Pi IP / Hostname:", self.ip_edit)
+        form.addRow("SSH Username:", self.user_edit)
+        form.addRow("SSH Password:", self.pass_edit)
+        form.addRow("", self.chk_reset_ts)
+        layout.addLayout(form)
+
+        self.log_box = QTextEdit()
+        self.log_box.setReadOnly(True)
+        self.log_box.setMinimumHeight(170)
+        self.log_box.setPlaceholderText("Uninstall progress log will appear here...")
+        layout.addWidget(self.log_box, 1)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        self.btn_close = QPushButton("Close")
+        self.btn_close.clicked.connect(self.reject)
+        self.btn_start = QPushButton("🗑 Uninstall...")
+        self.btn_start.setObjectName("dangerBtn")
+        self.btn_start.clicked.connect(self._on_start_clicked)
+        btn_row.addWidget(self.btn_close)
+        btn_row.addWidget(self.btn_start)
+        layout.addLayout(btn_row)
+
+    def _on_start_clicked(self) -> None:
+        host = self.ip_edit.text().strip()
+        user = self.user_edit.text().strip() or "pi"
+        password = self.pass_edit.text()
+        if not host or not password:
+            QMessageBox.warning(self, "Missing Details", "Please enter both the Raspberry Pi IP/hostname and SSH password.")
+            return
+
+        # 1. Confirmation
+        confirm = QMessageBox.question(
+            self,
+            "Confirm Uninstall",
+            f"Are you sure you want to uninstall GivEnergy Local Control from {host}?\n\n"
+            "This will stop the web service and delete /opt/givenergy-web (including any on-device data).",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+
+        # 2. Verify installation & data presence on the Pi before prompting for backup
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            install_info = uninstall_pi.check_pi_installation(host, user, password)
+        except Exception as exc:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.critical(self, "Connection Failed", f"Could not connect to {user}@{host}:\n{exc}")
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        if not install_info["installed"]:
+            QMessageBox.information(
+                self,
+                "Nothing to Uninstall",
+                f"GivEnergy Local Control does not appear to be installed on {host}.",
+            )
+            return
+
+        # 3. Backup prompt (only if data/config files exist on the Pi)
+        backup_path: Path | None = None
+        if install_info["has_data"]:
+            ask_backup = QMessageBox.question(
+                self,
+                "Take Backup First?",
+                "Would you like to save a backup (.zip) of your configuration and historic database before removing the software?",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                QMessageBox.Yes,
+            )
+            if ask_backup == QMessageBox.Cancel:
+                return
+            if ask_backup == QMessageBox.Yes:
+                stamp = time.strftime("%Y%m%d-%H%M%S")
+                default_name = f"givenergy-backup-{host}-{stamp}.zip"
+                chosen, _ = QFileDialog.getSaveFileName(
+                    self,
+                    "Save Pre-Uninstall Backup",
+                    default_name,
+                    "Zip Archives (*.zip)",
+                )
+                if not chosen:
+                    return
+                backup_path = Path(chosen)
+
+        # 3. Execute backup (if requested) + removal
+        self.log_box.clear()
+        self.btn_start.setEnabled(False)
+        self.btn_close.setEnabled(False)
+        self._worker = UninstallWorker(
+            host=host,
+            user=user,
+            password=password,
+            backup_path=backup_path,
+            reset_tailscale=self.chk_reset_ts.isChecked(),
+        )
+        self._worker.log_line.connect(self.log_box.append)
+        self._worker.finished_uninstall.connect(self._on_finished)
+        self._worker.start()
+
+    def _on_finished(self, ok: bool, msg: str) -> None:
+        self.btn_close.setEnabled(True)
+        self.btn_start.setEnabled(True)
+        if ok:
+            self.uninstalled = True
+            QMessageBox.information(self, "Uninstall Complete", msg)
+            self.accept()
+        else:
+            QMessageBox.critical(self, "Uninstall Failed", f"{msg}\n\nCheck the log output for details.")
 
 
 def _app_icon() -> QIcon:

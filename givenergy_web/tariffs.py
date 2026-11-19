@@ -15,6 +15,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from givenergy_web.db_utils import open_sqlite
+
 # Standard Great Britain Grid Supply Point (GSP) / DNO region codes (I and O are skipped)
 UK_GSP_REGIONS: dict[str, str] = {
     "A": "Eastern England",
@@ -575,11 +577,7 @@ class TariffRateCache:
         self._init_table()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.db_path), timeout=15.0)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA synchronous=NORMAL;")
-        return conn
+        return open_sqlite(self.db_path, timeout=15.0, temp_store_memory=False)
 
     def _init_table(self) -> None:
         with self._lock:

@@ -18,22 +18,21 @@ REMOTE_ROOT = "/opt/givenergy-web"
 
 LOCAL_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 
-FILES_TO_DEPLOY = [
-    ("givenergy_web/__init__.py", "givenergy_web/__init__.py"),
-    ("givenergy_web/config.py", "givenergy_web/config.py"),
-    ("givenergy_web/database.py", "givenergy_web/database.py"),
-    ("givenergy_web/models.py", "givenergy_web/models.py"),
-    ("givenergy_web/poller.py", "givenergy_web/poller.py"),
-    ("givenergy_web/server.py", "givenergy_web/server.py"),
-    ("givenergy_web/solar_forecast.py", "givenergy_web/solar_forecast.py"),
-    ("givenergy_web/tariffs.py", "givenergy_web/tariffs.py"),
-    ("givenergy_web/updater.py", "givenergy_web/updater.py"),
-    ("givenergy_web/static/index.html", "givenergy_web/static/index.html"),
-    ("givenergy_web/static/manifest.json", "givenergy_web/static/manifest.json"),
-    ("givenergy_web/static/icon.ico", "givenergy_web/static/icon.ico"),
-    ("givenergy_web/static/icon-192.png", "givenergy_web/static/icon-192.png"),
-    ("givenergy_web/static/icon-512.png", "givenergy_web/static/icon-512.png"),
-]
+def _collect_files_to_deploy() -> list[tuple[str, str]]:
+    """Collect all package and static files under givenergy_web/ (excluding __pycache__/*.pyc)."""
+    pkg_dir = LOCAL_ROOT / "givenergy_web"
+    items: list[tuple[str, str]] = []
+    for path in sorted(pkg_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        if "__pycache__" in path.parts or path.suffix in (".pyc", ".pyo"):
+            continue
+        rel = path.relative_to(LOCAL_ROOT).as_posix()
+        items.append((rel, rel))
+    return items
+
+
+FILES_TO_DEPLOY = _collect_files_to_deploy()
 
 SYSTEMD_UNIT_TEMPLATE = """[Unit]
 Description=GivEnergy Local Control & Historic Telemetry Web Service

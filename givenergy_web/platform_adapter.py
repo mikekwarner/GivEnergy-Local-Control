@@ -9,6 +9,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -57,17 +58,94 @@ class PlatformAdapter(ABC):
         """Restart the hosting service cleanly after an in-place app update."""
 
 
-def _short_hardware_label(model_str: str) -> str:
-    """Return a concise board name such as 'Pi 400', 'Pi 5', or 'Pi 4'."""
-    if not model_str:
-        return "Pi"
-    if "Raspberry Pi" in model_str:
-        short = model_str.split("Raspberry ", 1)[1]
-        for marker in (" Model ", " Rev "):
-            if marker in short:
-                short = short.split(marker, 1)[0]
-        return short.strip() or "Pi"
-    return model_str.split()[0][:16]
+def _detect_linux_hardware() -> tuple[bool, str, str]:
+    """Return (is_raspberry_pi, hardware_model, hardware_short)."""
+    pi_model_path = Path("/proc/device-tree/model")
+    if pi_model_path.exists():
+        try:
+            model_str = pi_model_path.read_text(errors="ignore").strip("\x00").strip()
+            if model_str:
+                is_pi = "raspberry pi" in model_str.lower()
+                if is_pi:
+                    short = model_str.split("Raspberry ", 1)[1]
+                    for marker in (" Model ", " Rev "):
+                        if marker in short:
+                            short = short.split(marker, 1)[0]
+                    return True, model_str, (short.strip() or "Pi")
+                return False, model_str, model_str.split()[0][:16]
+        except Exception:
+            pass
+
+    arch = platform.machine() or "Linux"
+    dmi_name = ""
+    for dmi_path in (Path("/sys/class/dmi/id/product_name"), Path("/sys/class/dmi/id/sys_vendor")):
+        if dmi_path.exists():
+            try:
+                val = dmi_path.read_text(errors="ignore").strip()
+                if val and val.lower() not in ("system product name", "to be filled by o.e.m.", "default string"):
+                    dmi_name = val
+                    break
+            except Exception:
+                pass
+
+    os_pretty = ""
+    os_release_path = Path("/etc/os-release")
+    if os_release_path.exists():
+        try:
+            for line in os_release_path.read_text(errors="ignore").splitlines():
+                if line.startswith("PRETTY_NAME="):
+                    os_pretty = line.split("=", 1)[1].strip().strip('"')
+                    break
+        except Exception:
+            pass
+
+    if dmi_name and os_pretty:
+        model_label = f"{os_pretty} ({dmi_name}, {arch})"
+    elif os_pretty:
+        model_label = f"{os_pretty} ({arch})"
+    elif dmi_name:
+        model_label = f"{dmi_name} ({arch})"
+    else:
+        model_label = f"Linux ({arch})"
+
+    short_label = os_pretty.split()[0][:14] if os_pretty else "Linux"
+    return False, model_label, short_label
+
+
+def _detect_storage_label() -> str:
+    """Programmatically detect root storage media type from /proc/mounts (e.g. MicroSD, NVMe SSD, SSD, HDD)."""
+    mounts_path = Path("/proc/mounts")
+    if not mounts_path.exists():
+        return ""
+    try:
+        root_dev = ""
+        for line in mounts_path.read_text(errors="ignore").splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[1] == "/":
+                root_dev = parts[0]
+                break
+        if not root_dev:
+            return ""
+        dev_name = Path(root_dev).name
+        if dev_name.startswith("mmcblk"):
+            return "MicroSD"
+        if dev_name.startswith("nvme"):
+            return "NVMe SSD"
+        if dev_name.startswith(("vd", "xvd")):
+            return "Virtual Disk"
+        if dev_name.startswith("sd"):
+            base_dev = dev_name.rstrip("0123456789")
+            rot_path = Path(f"/sys/block/{base_dev}/queue/rotational")
+            if rot_path.exists():
+                val = rot_path.read_text(errors="ignore").strip()
+                if val == "0":
+                    return "SSD"
+                if val == "1":
+                    return "HDD"
+            return "Disk"
+    except Exception:
+        pass
+    return ""
 
 
 class LinuxPiAdapter(PlatformAdapter):
@@ -75,6 +153,7 @@ class LinuxPiAdapter(PlatformAdapter):
 
     def __init__(self, service_name: str = "givenergy-web.service") -> None:
         self.service_name = service_name
+        self._prev_cpu: tuple[int, int] | None = None
         self._update_lock = threading.Lock()
         self._update_state: dict[str, Any] = {
             "running": False,
@@ -89,8 +168,10 @@ class LinuxPiAdapter(PlatformAdapter):
 
     @property
     def capabilities(self) -> dict[str, Any]:
+        is_pi, _, _ = _detect_linux_hardware()
         return {
             "platform": "linux",
+            "is_raspberry_pi": is_pi,
             "supports_os_updates": True,
             "supports_power_actions": True,
             "supports_app_updates": True,
@@ -136,6 +217,24 @@ class LinuxPiAdapter(PlatformAdapter):
             except Exception:
                 pass
 
+        cpu_usage_pct: float | None = None
+        stat_path = Path("/proc/stat")
+        if stat_path.exists():
+            try:
+                first_line = stat_path.read_text(errors="ignore").splitlines()[0]
+                if first_line.startswith("cpu "):
+                    nums = [int(x) for x in first_line.split()[1:]]
+                    idle = nums[3] + (nums[4] if len(nums) > 4 else 0)
+                    total = sum(nums)
+                    if self._prev_cpu is not None:
+                        d_total = total - self._prev_cpu[0]
+                        d_idle = idle - self._prev_cpu[1]
+                        if d_total > 0:
+                            cpu_usage_pct = round((d_total - d_idle) * 100.0 / d_total, 1)
+                    self._prev_cpu = (total, idle)
+            except Exception:
+                pass
+
         mem_total_mb = 0
         mem_used_mb = 0
         mem_pct = 0.0
@@ -168,25 +267,21 @@ class LinuxPiAdapter(PlatformAdapter):
         hours, rem = divmod(uptime_sec, 3600)
         mins, secs = divmod(rem, 60)
 
-        model_str = platform.machine()
-        pi_model_path = Path("/proc/device-tree/model")
-        if pi_model_path.exists():
-            try:
-                model_str = pi_model_path.read_text(errors="ignore").strip("\x00").strip()
-            except Exception:
-                pass
+        is_pi, model_str, short_str = _detect_linux_hardware()
 
         reboot_req, reboot_pkgs = self._check_reboot_required()
         return {
             "app_version": app_version,
             "hostname": socket.gethostname(),
             "hardware_model": model_str,
-            "hardware_short": _short_hardware_label(model_str),
+            "hardware_short": short_str,
+            "is_raspberry_pi": is_pi,
             "reboot_required": reboot_req,
             "reboot_pkgs": reboot_pkgs,
             "os_release": f"{platform.system()} {platform.release()}",
             "python_version": platform.python_version(),
             "cpu_temp_c": cpu_temp_c,
+            "cpu_usage_pct": cpu_usage_pct,
             "load_avg": load_avg,
             "mem_total_mb": mem_total_mb,
             "mem_used_mb": mem_used_mb,
@@ -195,6 +290,7 @@ class LinuxPiAdapter(PlatformAdapter):
             "disk_used_gb": disk_used_gb,
             "disk_free_gb": disk_free_gb,
             "disk_pct": disk_pct,
+            "storage_type": _detect_storage_label(),
             "service_uptime_sec": uptime_sec,
             "service_uptime_str": f"{hours}h {mins}m {secs}s",
             "ws_clients": ws_clients,
@@ -230,7 +326,9 @@ class LinuxPiAdapter(PlatformAdapter):
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
-        return True, f"Raspberry Pi {cmd_arg} scheduled."
+        is_pi, _, _ = _detect_linux_hardware()
+        target_label = "Raspberry Pi" if is_pi else "Host"
+        return True, f"{target_label} {cmd_arg} scheduled."
 
     def _stream_apt_cmd(self, cmd: list[str], env: dict[str, str], base_pct: int, max_pct: int) -> int:
         proc = subprocess.Popen(
@@ -262,7 +360,7 @@ class LinuxPiAdapter(PlatformAdapter):
                 self._update_state.update({
                     "running": True,
                     "phase": "update",
-                    "status_text": "Checking for Raspberry Pi OS package updates (apt-get update)...",
+                    "status_text": "Checking for OS package updates (apt-get update)...",
                     "percent": 10,
                     "ok": None,
                     "output": "=== Step 1/2: Running apt-get update ===",
@@ -350,6 +448,178 @@ class LinuxPiAdapter(PlatformAdapter):
         os.kill(os.getpid(), signal.SIGTERM)
 
 
+class WindowsAdapter(PlatformAdapter):
+    """Windows Service host implementation using Win32 APIs and standard library."""
+
+    def __init__(self) -> None:
+        self._prev_cpu_times: tuple[int, int, int] | None = self._read_cpu_times()
+
+    @staticmethod
+    def _read_cpu_times() -> tuple[int, int, int] | None:
+        import ctypes
+        from ctypes import wintypes
+
+        class FILETIME(ctypes.Structure):
+            _fields_ = [("dwLowDateTime", wintypes.DWORD), ("dwHighDateTime", wintypes.DWORD)]
+
+        idle, kern, user = FILETIME(), FILETIME(), FILETIME()
+        if not ctypes.windll.kernel32.GetSystemTimes(ctypes.byref(idle), ctypes.byref(kern), ctypes.byref(user)):
+            return None
+        return (
+            (idle.dwHighDateTime << 32) | idle.dwLowDateTime,
+            (kern.dwHighDateTime << 32) | kern.dwLowDateTime,
+            (user.dwHighDateTime << 32) | user.dwLowDateTime,
+        )
+
+    def _read_cpu_usage_pct(self) -> float | None:
+        cur = self._read_cpu_times()
+        if cur is None:
+            return None
+        prev = self._prev_cpu_times
+        self._prev_cpu_times = cur
+        if prev is None:
+            return None
+        idle_d = cur[0] - prev[0]
+        tot_d = (cur[1] - prev[1]) + (cur[2] - prev[2])
+        if tot_d <= 0:
+            return None
+        return round(max(0.0, min(100.0, (tot_d - idle_d) * 100.0 / tot_d)), 1)
+
+    @property
+    def capabilities(self) -> dict[str, Any]:
+        return {
+            "platform": "windows",
+            "is_raspberry_pi": False,
+            "supports_os_updates": False,
+            "supports_power_actions": False,
+            "supports_app_updates": False,
+            "supports_tailscale_cli": bool(shutil.which("tailscale")),
+        }
+
+    @staticmethod
+    def _read_windows_memory() -> tuple[int, int, float]:
+        import ctypes
+        from ctypes import wintypes
+
+        class MEMORYSTATUSEX(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", wintypes.DWORD),
+                ("dwMemoryLoad", wintypes.DWORD),
+                ("ullTotalPhys", ctypes.c_uint64),
+                ("ullAvailPhys", ctypes.c_uint64),
+                ("ullTotalPageFile", ctypes.c_uint64),
+                ("ullAvailPageFile", ctypes.c_uint64),
+                ("ullTotalVirtual", ctypes.c_uint64),
+                ("ullAvailVirtual", ctypes.c_uint64),
+                ("sullAvailExtendedVirtual", ctypes.c_uint64),
+            ]
+
+        stat = MEMORYSTATUSEX()
+        stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+            return 0, 0, 0.0
+        total_mb = round(stat.ullTotalPhys / (1024 * 1024))
+        avail_mb = round(stat.ullAvailPhys / (1024 * 1024))
+        used_mb = max(0, total_mb - avail_mb)
+        pct = round((used_mb * 100.0 / total_mb), 1) if total_mb else 0.0
+        return total_mb, used_mb, pct
+
+    def read_system_stats(
+        self,
+        *,
+        app_version: str,
+        started_at: float,
+        ws_clients: int,
+        db_stats: dict[str, Any],
+        data_dir: Path,
+    ) -> dict[str, Any]:
+        mem_total_mb, mem_used_mb, mem_pct = self._read_windows_memory()
+        disk = shutil.disk_usage(str(data_dir))
+        disk_total_gb = round(disk.total / (1024**3), 2)
+        disk_used_gb = round(disk.used / (1024**3), 2)
+        disk_free_gb = round(disk.free / (1024**3), 2)
+        disk_pct = round(disk.used * 100.0 / disk.total, 1) if disk.total else 0.0
+
+        uptime_sec = int(time.time() - started_at)
+        hours, rem = divmod(uptime_sec, 3600)
+        mins, secs = divmod(rem, 60)
+
+        arch = platform.machine() or "AMD64"
+        os_rel = f"Windows {platform.release()}"
+        model_str = f"{os_rel} ({arch})"
+
+        return {
+            "app_version": app_version,
+            "hostname": socket.gethostname(),
+            "hardware_model": model_str,
+            "hardware_short": "Windows",
+            "is_raspberry_pi": False,
+            "reboot_required": False,
+            "reboot_pkgs": [],
+            "os_release": f"{platform.system()} {platform.release()} ({platform.version()})",
+            "python_version": platform.python_version(),
+            "cpu_temp_c": None,
+            "cpu_usage_pct": self._read_cpu_usage_pct(),
+            "load_avg": [],
+            "mem_total_mb": mem_total_mb,
+            "mem_used_mb": mem_used_mb,
+            "mem_pct": mem_pct,
+            "disk_total_gb": disk_total_gb,
+            "disk_used_gb": disk_used_gb,
+            "disk_free_gb": disk_free_gb,
+            "disk_pct": disk_pct,
+            "storage_type": "",
+            "service_uptime_sec": uptime_sec,
+            "service_uptime_str": f"{hours}h {mins}m {secs}s",
+            "ws_clients": ws_clients,
+            "database": db_stats,
+            "capabilities": self.capabilities,
+        }
+
+    def read_tailscale_funnel_info(self) -> dict[str, str]:
+        info = {"tailscale_ip": "", "tailscale_dns": "", "funnel_url": ""}
+        ts_exe = shutil.which("tailscale")
+        if not ts_exe:
+            return info
+        try:
+            proc = subprocess.run([ts_exe, "status", "--json"], capture_output=True, text=True, timeout=3.0)
+            if proc.returncode == 0 and proc.stdout:
+                data = json.loads(proc.stdout)
+                self_node = data.get("Self") or {}
+                ips = self_node.get("TailscaleIPs") or []
+                info["tailscale_ip"] = next((ip for ip in ips if "." in ip), "")
+                dns = (self_node.get("DNSName") or "").rstrip(".")
+                info["tailscale_dns"] = dns
+                if dns:
+                    info["funnel_url"] = f"https://{dns}"
+        except Exception:
+            pass
+        return info
+
+    def run_power_action(self, action: str) -> tuple[bool, str]:
+        return False, "Host reboot/shutdown is disabled on Windows."
+
+    def start_system_updates(self) -> dict[str, Any]:
+        return {"ok": False, "started": False, "error": "OS package updates are not supported on Windows."}
+
+    def get_system_update_status(self) -> dict[str, Any]:
+        return {
+            "running": False,
+            "phase": "unsupported",
+            "status_text": "Managed via Windows Update",
+            "percent": 0,
+            "ok": None,
+            "reboot_required": False,
+            "reboot_pkgs": [],
+            "output": "",
+        }
+
+    def trigger_service_restart(self) -> None:
+        return
+
+
 def get_platform_adapter() -> PlatformAdapter:
-    """Return the active platform adapter (Linux/Pi currently supported)."""
+    """Return the active platform adapter for the current OS."""
+    if sys.platform == "win32":
+        return WindowsAdapter()
     return LinuxPiAdapter()

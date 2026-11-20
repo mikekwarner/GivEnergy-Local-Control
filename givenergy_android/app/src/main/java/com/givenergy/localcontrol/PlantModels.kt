@@ -79,6 +79,8 @@ data class EvChargerState(
 data class PiSystemState(
     val hostname: String = "",
     val hardwareModel: String = "",
+    val isRaspberryPi: Boolean = false,
+    val storageType: String = "",
     val appVersion: String = "",
     val cpuTempC: Double? = null,
     val memPct: Double = 0.0,
@@ -403,9 +405,18 @@ object PlantJsonParser {
         )
 
         val sys = if (sysObj != null) {
+            val hwModel = sysObj.optString("hardware_model", "")
+            val capsObj = sysObj.optJSONObject("capabilities")
+            val isPi = when {
+                capsObj != null && capsObj.has("is_raspberry_pi") -> capsObj.optBoolean("is_raspberry_pi", false)
+                sysObj.has("is_raspberry_pi") -> sysObj.optBoolean("is_raspberry_pi", false)
+                else -> hwModel.contains("raspberry", ignoreCase = true)
+            }
             PiSystemState(
                 hostname = sysObj.optString("hostname", ""),
-                hardwareModel = sysObj.optString("hardware_model", ""),
+                hardwareModel = hwModel,
+                isRaspberryPi = isPi,
+                storageType = sysObj.optString("storage_type", ""),
                 appVersion = sysObj.optString("app_version", ""),
                 cpuTempC = if (sysObj.isNull("cpu_temp_c")) null else sysObj.optDouble("cpu_temp_c"),
                 memPct = sysObj.optDouble("mem_pct", 0.0),

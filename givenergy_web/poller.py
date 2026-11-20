@@ -264,7 +264,7 @@ class AsyncPlantPoller:
 
         self.log_event(
             "info",
-            f"Starting Raspberry Pi 5 poller for Inverter ({self.inverter_ip}:{self.inverter_port}) "
+            f"Starting GivEnergy plant poller for Inverter ({self.inverter_ip}:{self.inverter_port}) "
             f"& EV Charger ({self.evc_ip}:{self.evc_port})",
         )
 

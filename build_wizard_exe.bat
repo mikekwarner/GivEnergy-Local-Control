@@ -11,6 +11,29 @@ for %%A in (%*) do (
 
 if not exist "dist" mkdir "dist"
 
+echo Building lightweight Windows Service binary ^(GivEnergyService.exe^)...
+".venv\Scripts\pyinstaller.exe" ^
+  --noconfirm ^
+  --clean ^
+  --noconsole ^
+  --onedir ^
+  --distpath "build\service_dist" ^
+  --name GivEnergyService ^
+  --icon "givenergy_web\static\icon.ico" ^
+  --add-data "givenergy_web;givenergy_web" ^
+  --exclude-module PySide6 ^
+  --exclude-module shiboken6 ^
+  --exclude-module paramiko ^
+  --exclude-module tkinter ^
+  windows_service.py
+
+if errorlevel 1 (
+  echo.
+  echo Windows Service build failed!
+  exit /b 1
+)
+
+echo.
 echo Building standalone GivEnergy-Local-Control-Installer.exe ...
 ".venv\Scripts\pyinstaller.exe" ^
   --noconfirm ^
@@ -20,11 +43,21 @@ echo Building standalone GivEnergy-Local-Control-Installer.exe ...
   --name GivEnergy-Local-Control-Installer ^
   --icon "givenergy_web\static\icon.ico" ^
   --add-data "givenergy_web;givenergy_web" ^
+  --add-data "build\service_dist\GivEnergyService;GivEnergyService" ^
   wizard.py
 
 if errorlevel 1 (
   echo.
   echo Installer build failed!
+  exit /b 1
+)
+
+echo.
+echo Building Linux local installer package ^(GivEnergy-Local-Control-Linux.tar.gz^) ...
+".venv\Scripts\python.exe" build_linux_pkg.py
+if errorlevel 1 (
+  echo.
+  echo Linux package build failed!
   exit /b 1
 )
 
@@ -85,6 +118,9 @@ if errorlevel 1 (
 echo.
 echo Build succeeded:
 echo   - "%~dp0dist\GivEnergy-Local-Control-Installer.exe"
+if exist "dist\GivEnergy-Local-Control-Linux.tar.gz" (
+  echo   - "%~dp0dist\GivEnergy-Local-Control-Linux.tar.gz"
+)
 if exist "dist\givenergy-local-control.apk" (
   echo   - "%~dp0dist\givenergy-local-control.apk"
 )

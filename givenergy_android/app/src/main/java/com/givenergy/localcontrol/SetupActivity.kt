@@ -182,7 +182,7 @@ class SetupActivity : AppCompatActivity() {
                     setResult(RESULT_OK)
                     finish()
                 } else {
-                    showStatus(lastError.ifBlank { "Could not reach Raspberry Pi." }, isError = true)
+                    showStatus(lastError.ifBlank { "Could not reach GivEnergy server." }, isError = true)
                 }
             }
         }

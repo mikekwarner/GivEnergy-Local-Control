@@ -72,7 +72,7 @@ fun TabletWebScreen(
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                "Pair with your Raspberry Pi / local server to load the tablet dashboard.",
+                "Pair with your GivEnergy local server to load the tablet dashboard.",
                 color = Color(0xFF94A3B8),
                 fontSize = 14.sp,
             )

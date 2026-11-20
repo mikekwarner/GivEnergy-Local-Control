@@ -21,6 +21,7 @@ from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon
 from PySide6.QtWidgets import (
     QAbstractButton,
     QApplication,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -38,7 +39,9 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QRadioButton,
     QScrollArea,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
@@ -49,8 +52,10 @@ from PySide6.QtWidgets import (
 )
 
 import deploy_to_pi
+import deploy_windows
 import setup_pi
 import uninstall_pi
+import windows_service
 from givenergy_web import __version__ as APP_VERSION
 from givenergy_web.tariffs import (
     UK_GSP_REGIONS,
@@ -641,10 +646,356 @@ def _find_rpi_imager() -> str | None:
     return None
 
 
+PAGE_PLATFORM = 0
+PAGE_PI_PREP = 1
+PAGE_LINUX_PREP = 2
+PAGE_WIN_PREP = 3
+PAGE_DISCOVER = 4
+PAGE_TARIFF = 5
+PAGE_SOLAR = 6
+PAGE_CREDS = 7
+PAGE_DEPLOY = 8
+PAGE_FINISH = 9
+
+
+class TargetPlatformPage(QWizardPage):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setTitle("Step 1: Select Target Operating System")
+        self.setSubTitle("Choose whether you are deploying to a Raspberry Pi, a Linux host, or this Windows PC.")
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        grp_os = QGroupBox("Target Platform")
+        os_layout = QVBoxLayout(grp_os)
+        os_layout.setSpacing(8)
+
+        self.radio_pi = QRadioButton("🍓 Raspberry Pi (Raspberry Pi OS Lite)")
+        self.radio_pi.setStyleSheet("font-size: 14px; font-weight: 600;")
+        lbl_pi_desc = QLabel(
+            "Best for dedicated 24/7 low-power monitoring. Includes Raspberry Pi Imager guide and "
+            "optional MicroSD wear-protection (60s RAM-batched SQLite writes + volatile RAM logs)."
+        )
+        lbl_pi_desc.setWordWrap(True)
+        lbl_pi_desc.setStyleSheet("color: #94A3B8; margin-left: 24px;")
+
+        self.radio_linux = QRadioButton("🐧 Linux PC / Server / VM (Ubuntu / Debian)")
+        self.radio_linux.setStyleSheet("font-size: 14px; font-weight: 600;")
+        lbl_linux_desc = QLabel(
+            "Best if you already run an always-on Ubuntu/Debian Mini-PC, home server, or Proxmox VM. "
+            "Requires OpenSSH Server and defaults to SSD/NVMe storage tuning (15s SQLite flush)."
+        )
+        lbl_linux_desc.setWordWrap(True)
+        lbl_linux_desc.setStyleSheet("color: #94A3B8; margin-left: 24px;")
+
+        self.radio_windows = QRadioButton("🪟 This Windows PC (Local Windows Service)")
+        self.radio_windows.setStyleSheet("font-size: 14px; font-weight: 600;")
+        lbl_win_desc = QLabel(
+            "Installs directly on this Windows machine as an automatic background Windows Service, "
+            "with IIS/port selection, Windows Firewall rule, and Uninstall support in Windows Settings."
+        )
+        lbl_win_desc.setWordWrap(True)
+        lbl_win_desc.setStyleSheet("color: #94A3B8; margin-left: 24px;")
+
+        self.btn_group = QButtonGroup(self)
+        self.btn_group.addButton(self.radio_pi)
+        self.btn_group.addButton(self.radio_linux)
+        self.btn_group.addButton(self.radio_windows)
+        self.radio_pi.setChecked(True)
+        self.radio_pi.toggled.connect(self._sync_choice)
+        self.radio_linux.toggled.connect(self._sync_choice)
+        self.radio_windows.toggled.connect(self._sync_choice)
+
+        os_layout.addWidget(self.radio_pi)
+        os_layout.addWidget(lbl_pi_desc)
+        os_layout.addSpacing(2)
+        os_layout.addWidget(self.radio_linux)
+        os_layout.addWidget(lbl_linux_desc)
+        os_layout.addSpacing(2)
+        os_layout.addWidget(self.radio_windows)
+        os_layout.addWidget(lbl_win_desc)
+        layout.addWidget(grp_os)
+
+        grp_guide = QGroupBox("Optimal Setup Guide (Power Efficiency, Storage && Reliability)")
+        guide_layout = QVBoxLayout(grp_guide)
+        lbl_guide = QLabel(
+            "• <b>Power Efficiency:</b> A <b>Raspberry Pi 4/5</b> draws ~3–7 W idle (~25–60 kWh/yr), making it ideal "
+            "as a dedicated 24/7 appliance. An existing <b>Ubuntu/Debian or Windows Mini-PC/Server</b> draws ~10–35 W+ "
+            "idle, which is optimal when consolidating onto hardware already running 24/7.<br><br>"
+            "• <b>Storage Longevity:</b> For a Pi on a <b>MicroSD card</b>, keep Wear-Protection mode enabled (60s "
+            "RAM-batched DB flushes + volatile RAM logs). On an <b>NVMe/USB SSD</b>, Linux server, or Windows PC, "
+            "15s DB flushes and rotating/compressed disk logs are used.<br><br>"
+            "• <b>Reliability:</b> Use wired <b>Ethernet</b> over Wi-Fi where possible for uninterrupted Modbus TCP "
+            "polling (ports <code>8899</code> &amp; <code>502</code>), and disable OS sleep/hibernate on desktop PCs."
+        )
+        lbl_guide.setWordWrap(True)
+        guide_layout.addWidget(lbl_guide)
+        layout.addWidget(grp_guide)
+        layout.addStretch()
+
+    def _sync_choice(self) -> None:
+        if self.wizard() is not None:
+            if self.radio_windows.isChecked():
+                self.wizard().setProperty("target_os", "windows")
+            elif self.radio_linux.isChecked():
+                self.wizard().setProperty("target_os", "linux")
+            else:
+                self.wizard().setProperty("target_os", "pi")
+
+    def initializePage(self) -> None:
+        self._sync_choice()
+
+    def nextId(self) -> int:
+        if self.radio_windows.isChecked():
+            return PAGE_WIN_PREP
+        if self.radio_linux.isChecked():
+            return PAGE_LINUX_PREP
+        return PAGE_PI_PREP
+
+
+class LinuxPrepPage(QWizardPage):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setTitle("Step 2: Prepare Linux Host (OpenSSH Prerequisite)")
+        self.setSubTitle("Ensure OpenSSH Server is installed and running on your Ubuntu / Debian machine.")
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        grp_ssh = QGroupBox("1. Install && Enable OpenSSH Server (Required)")
+        ssh_layout = QVBoxLayout(grp_ssh)
+        lbl_ssh = QLabel(
+            "The installer connects over SSH (port <code>22</code>) to deploy the service. "
+            "On Ubuntu/Debian desktop or minimal installs, OpenSSH Server is not always installed by default.<br><br>"
+            "Run these commands on your Linux host before clicking <b>Next</b>:"
+        )
+        lbl_ssh.setWordWrap(True)
+        txt_cmds = QTextEdit()
+        txt_cmds.setReadOnly(True)
+        txt_cmds.setMaximumHeight(115)
+        txt_cmds.setPlainText(
+            "sudo apt update && sudo apt install -y openssh-server\n"
+            "sudo systemctl enable --now ssh\n"
+            "# If UFW firewall is active:\n"
+            "sudo ufw allow ssh"
+        )
+        ssh_layout.addWidget(lbl_ssh)
+        ssh_layout.addWidget(txt_cmds)
+        layout.addWidget(grp_ssh)
+
+        grp_tips = QGroupBox("2. Recommended Linux Host Settings")
+        tips_layout = QVBoxLayout(grp_tips)
+        lbl_tips = QLabel(
+            "• <b>Disable Sleep / Suspend:</b> If running Ubuntu Desktop, set Power Mode to <i>Never Suspend</i> "
+            "so 24/7 Modbus polling and EV solar charging are never paused.<br>"
+            "• <b>Port 80 Availability:</b> Ensure Apache/Nginx is not already bound to port <code>80</code>.<br>"
+            "• <b>User Permissions:</b> Use an account with <code>sudo</code> privileges for service setup."
+        )
+        lbl_tips.setWordWrap(True)
+        tips_layout.addWidget(lbl_tips)
+        layout.addWidget(grp_tips)
+        layout.addStretch()
+
+    def nextId(self) -> int:
+        return PAGE_DISCOVER
+
+
+class WindowsPrepPage(QWizardPage):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setTitle("Step 2: Windows Prerequisites & Service Port")
+        self.setSubTitle("Review Windows Service prerequisites and choose how port 80 / IIS should be handled.")
+        self._iis_info: dict[str, bool] = {"iis_installed": False, "iis_running": False, "port_80_in_use": False}
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        grp_prereq = QGroupBox("1. Windows Prerequisites")
+        prereq_layout = QVBoxLayout(grp_prereq)
+        self.lbl_prereq = QLabel(
+            "• <b>Administrator Privileges:</b> Required to register the Windows Service, configure Windows Firewall, "
+            "and optionally stop/disable IIS.<br>"
+            "• <b>Power &amp; Sleep Settings:</b> Set Windows Sleep/Hibernate to <i>Never</i> on always-on PCs so "
+            "24/7 Modbus polling and EV solar charging are never interrupted.<br>"
+            "• <b>Service &amp; Uninstall:</b> Installs to <code>C:\\Program Files\\GivEnergy Local Control</code>, "
+            "stores data in <code>%ProgramData%\\GivEnergyLocalControl</code>, and registers in "
+            "<b>Windows Settings → Apps → Installed apps</b>."
+        )
+        self.lbl_prereq.setWordWrap(True)
+        prereq_layout.addWidget(self.lbl_prereq)
+
+        admin_row = QHBoxLayout()
+        self.lbl_admin_status = QLabel("")
+        self.btn_elevate = QPushButton("🛡 Restart Installer as Administrator")
+        self.btn_elevate.setObjectName("primaryBtn")
+        self.btn_elevate.clicked.connect(self._relaunch_elevated)
+        admin_row.addWidget(self.lbl_admin_status, 1)
+        admin_row.addWidget(self.btn_elevate)
+        prereq_layout.addLayout(admin_row)
+        layout.addWidget(grp_prereq)
+
+        grp_port = QGroupBox("2. IIS && HTTP Port Selection")
+        port_layout = QVBoxLayout(grp_port)
+        self.lbl_iis_status = QLabel("Checking port 80 and IIS (W3SVC)...")
+        self.lbl_iis_status.setWordWrap(True)
+        port_layout.addWidget(self.lbl_iis_status)
+
+        self.radio_port80 = QRadioButton("Use port 80 (default HTTP)")
+        self.radio_custom_port = QRadioButton("Use a custom HTTP port:")
+        self.spn_port = QSpinBox()
+        self.spn_port.setRange(1, 65535)
+        self.spn_port.setValue(8080)
+        self.spn_port.setFixedWidth(100)
+        self.radio_custom_port.toggled.connect(self.spn_port.setEnabled)
+
+        self.port_group = QButtonGroup(self)
+        self.port_group.addButton(self.radio_port80)
+        self.port_group.addButton(self.radio_custom_port)
+
+        custom_row = QHBoxLayout()
+        custom_row.addWidget(self.radio_custom_port)
+        custom_row.addWidget(self.spn_port)
+        custom_row.addStretch()
+
+        port_layout.addWidget(self.radio_port80)
+        port_layout.addLayout(custom_row)
+        layout.addWidget(grp_port)
+
+        grp_opts = QGroupBox("3. Firewall && Data Options")
+        opts_layout = QVBoxLayout(grp_opts)
+        self.chk_firewall = QCheckBox("Add Windows Firewall inbound rule for selected TCP port (recommended for LAN access)")
+        self.chk_firewall.setChecked(True)
+        self.chk_win_wipe = QCheckBox("Wipe existing telemetry history && saved hardware configuration on this PC")
+        self.chk_win_wipe.setChecked(False)
+        opts_layout.addWidget(self.chk_firewall)
+        opts_layout.addWidget(self.chk_win_wipe)
+        layout.addWidget(grp_opts)
+        layout.addStretch()
+
+    def _relaunch_elevated(self) -> None:
+        import ctypes
+
+        if getattr(sys, "frozen", False):
+            exe = sys.executable
+            params = " ".join(f'"{a}"' for a in sys.argv[1:])
+        else:
+            exe = sys.executable
+            params = " ".join(f'"{a}"' for a in [str(Path(__file__).resolve()), *sys.argv[1:]])
+        rc = ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, params or None, None, 1)
+        if rc > 32:
+            QApplication.quit()
+        else:
+            QMessageBox.warning(self, "Elevation Cancelled", "Administrator elevation is required to install the Windows Service.")
+
+    def initializePage(self) -> None:
+        admin = deploy_windows.is_admin()
+        if admin:
+            self.lbl_admin_status.setStyleSheet("color: #34D399; font-weight: 600;")
+            self.lbl_admin_status.setText("✓ Running with Administrator privileges.")
+            self.btn_elevate.setVisible(False)
+        else:
+            self.lbl_admin_status.setStyleSheet("color: #FBBF24; font-weight: 600;")
+            self.lbl_admin_status.setText("⚠ Not elevated — Administrator rights are required to install the service.")
+            self.btn_elevate.setVisible(True)
+
+        self._iis_info = deploy_windows.detect_iis_status()
+        giv_running = bool(self._iis_info.get("givenergy_running"))
+        giv_port = self._iis_info.get("givenergy_port")
+        if self._iis_info["iis_running"]:
+            self.lbl_iis_status.setStyleSheet("color: #FBBF24;")
+            self.lbl_iis_status.setText(
+                "⚠ Windows IIS (W3SVC) is currently running on port 80. "
+                "You can replace the Default IIS Web Site (stops & disables IIS) or choose another port (e.g. 8080)."
+            )
+            self.radio_port80.setText("Replace Default IIS Web Site (stop && disable IIS, bind port 80)")
+            self.radio_custom_port.setChecked(True)
+            self.spn_port.setEnabled(True)
+        elif giv_running and giv_port == 80:
+            self.lbl_iis_status.setStyleSheet("color: #34D399;")
+            self.lbl_iis_status.setText(
+                "✓ GivEnergy Local Control is currently running on port 80 (the installer will stop and upgrade it)."
+            )
+            self.radio_port80.setText("Use standard HTTP port 80 (http://localhost)")
+            self.radio_port80.setChecked(True)
+            self.spn_port.setEnabled(False)
+        elif giv_running and giv_port and giv_port != 80:
+            self.lbl_iis_status.setStyleSheet("color: #34D399;")
+            self.lbl_iis_status.setText(
+                f"✓ GivEnergy Local Control is currently running on port {giv_port} (the installer will stop and upgrade it)."
+            )
+            self.radio_port80.setText("Use standard HTTP port 80 (http://localhost)")
+            self.spn_port.setValue(int(giv_port))
+            self.radio_custom_port.setChecked(True)
+            self.spn_port.setEnabled(True)
+        elif self._iis_info["port_80_in_use"]:
+            self.lbl_iis_status.setStyleSheet("color: #FBBF24;")
+            self.lbl_iis_status.setText(
+                "⚠ Port 80 is currently in use by another process. Select a custom port (e.g. 8080) below."
+            )
+            self.radio_port80.setText("Use port 80 (currently occupied)")
+            self.radio_custom_port.setChecked(True)
+            self.spn_port.setEnabled(True)
+        else:
+            self.lbl_iis_status.setStyleSheet("color: #34D399;")
+            self.lbl_iis_status.setText("✓ Port 80 is available (IIS is not active).")
+            self.radio_port80.setText("Use standard HTTP port 80 (http://localhost)")
+            self.radio_port80.setChecked(True)
+            self.spn_port.setEnabled(False)
+
+    def selected_port(self) -> int:
+        return 80 if self.radio_port80.isChecked() else int(self.spn_port.value())
+
+    def replace_iis(self) -> bool:
+        return bool(self.radio_port80.isChecked() and (self._iis_info["iis_running"] or self._iis_info["iis_installed"]))
+
+    def validatePage(self) -> bool:
+        if not deploy_windows.is_admin():
+            ans = QMessageBox.question(
+                self,
+                "Administrator Required",
+                "Installing a Windows Service requires Administrator privileges.\n\n"
+                "Restart the installer as Administrator now?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if ans == QMessageBox.Yes:
+                self._relaunch_elevated()
+            return False
+
+        port = self.selected_port()
+        giv_running = bool(self._iis_info.get("givenergy_running"))
+        giv_port = self._iis_info.get("givenergy_port")
+        if port != 80 and not (giv_running and giv_port == port) and deploy_windows.is_port_in_use(port):
+            ans = QMessageBox.warning(
+                self,
+                "Port In Use",
+                f"TCP port {port} appears to be in use on this PC. Continue anyway?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if ans != QMessageBox.Yes:
+                return False
+        elif port == 80 and self._iis_info["port_80_in_use"] and not self._iis_info["iis_running"] and not (giv_running and giv_port == 80):
+            ans = QMessageBox.warning(
+                self,
+                "Port 80 In Use",
+                "Port 80 is in use by a non-IIS process. The service may fail to bind port 80.\n\nContinue anyway?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if ans != QMessageBox.Yes:
+                return False
+        return True
+
+    def nextId(self) -> int:
+        return PAGE_TARIFF
+
+
 class OSPrepPage(QWizardPage):
     def __init__(self) -> None:
         super().__init__()
-        self.setTitle("Step 1: Prepare Raspberry Pi OS Lite")
+        self.setTitle("Step 2: Prepare Raspberry Pi OS Lite")
         self.setSubTitle("Flash a fresh MicroSD card or SSD before running network discovery.")
         self._imager_path: str | None = None
 
@@ -727,6 +1078,9 @@ class OSPrepPage(QWizardPage):
             except Exception as exc:
                 QMessageBox.warning(self, "Launch Failed", f"Could not launch Raspberry Pi Imager:\n{exc}")
 
+    def nextId(self) -> int:
+        return PAGE_DISCOVER
+
 
 class DiscoverPiPage(QWizardPage):
     def __init__(self) -> None:
@@ -791,14 +1145,18 @@ class DiscoverPiPage(QWizardPage):
     def isComplete(self) -> bool:
         return bool(self.selected_ip_edit.text().strip())
 
+    def _is_linux_mode(self) -> bool:
+        return bool(self.wizard() is not None and self.wizard().property("target_os") == "linux")
+
     def validatePage(self) -> bool:
         ip = self.selected_ip_edit.text().strip()
         item = self._scan_results_by_ip.get(ip)
+        is_linux = self._is_linux_mode()
         if item is not None:
             warnings: list[str] = []
             if not item.get("has_ssh"):
                 warnings.append("• SSH (port 22) is not open on this device.")
-            if not item.get("is_rpi"):
+            if not is_linux and not item.get("is_rpi"):
                 warnings.append(
                     f"• This device does not appear to be a Raspberry Pi ({item.get('info', 'SSH Host')}, MAC: {item.get('mac', '—')})."
                 )
@@ -831,11 +1189,25 @@ class DiscoverPiPage(QWizardPage):
 
     def _open_uninstaller(self) -> None:
         ip = self.selected_ip_edit.text().strip()
-        dlg = UninstallPiDialog(initial_ip=ip, parent=self)
+        target_os = "linux" if self._is_linux_mode() else "pi"
+        dlg = UninstallPiDialog(initial_ip=ip, target_os=target_os, parent=self)
         if dlg.exec() == QDialog.Accepted and dlg.uninstalled:
             self.start_scan()
 
     def initializePage(self) -> None:
+        is_linux = self._is_linux_mode()
+        if is_linux:
+            self.setTitle("Step 3: Auto-Detect Linux Hosts on Local Network")
+            self.setSubTitle("Select a detected Linux host below, or enter an IP address manually to continue.")
+            self.btn_scan.setText("🔍 Scan Network for Hosts")
+            self.btn_uninstall.setText("🗑 Uninstall from Host...")
+            self.btn_uninstall.setToolTip("Back up and completely remove GivEnergy Local Control from the selected Linux host")
+        else:
+            self.setTitle("Step 3: Auto-Detect Raspberry Pis on Local Network")
+            self.setSubTitle("Select a detected Raspberry Pi below, or enter an IP address manually to continue.")
+            self.btn_scan.setText("🔍 Scan Network for Pis")
+            self.btn_uninstall.setText("🗑 Uninstall from Pi...")
+            self.btn_uninstall.setToolTip("Back up and completely remove GivEnergy Local Control from the selected Raspberry Pi")
         self.completeChanged.emit()
         if self.table.rowCount() == 0:
             self.start_scan()
@@ -843,15 +1215,24 @@ class DiscoverPiPage(QWizardPage):
     def start_scan(self) -> None:
         if self._worker and self._worker.isRunning():
             return
+        is_linux = self._is_linux_mode()
         self.btn_scan.setEnabled(False)
         self.btn_scan.setText("⏳ Scanning...")
         self.scan_progress.show()
-        self.lbl_status.setText("⏳ Scanning local /24 subnet for Raspberry Pis (SSH :22, Web :80, RPi MACs)...")
+        self.lbl_status.setText(
+            "⏳ Scanning local /24 subnet for Linux hosts (SSH :22, Web :80)..."
+            if is_linux
+            else "⏳ Scanning local /24 subnet for Raspberry Pis (SSH :22, Web :80, RPi MACs)..."
+        )
         if self.table.rowCount() == 0:
             self.table.setRowCount(1)
             self.table.setItem(0, 0, QTableWidgetItem("Scanning..."))
             self.table.setItem(0, 1, QTableWidgetItem("—"))
-            self.table.setItem(0, 2, QTableWidgetItem("Searching local network for Raspberry Pis..."))
+            self.table.setItem(
+                0,
+                2,
+                QTableWidgetItem("Searching local network for Linux hosts..." if is_linux else "Searching local network for Raspberry Pis..."),
+            )
             self.table.setItem(0, 3, QTableWidgetItem("—"))
             self.table.setItem(0, 4, QTableWidgetItem("In Progress"))
         self._worker = NetworkScanWorker()
@@ -861,7 +1242,7 @@ class DiscoverPiPage(QWizardPage):
 
     def _on_scan_done(self, subnet: str, results: list[dict]) -> None:
         self.scan_progress.hide()
-        self.btn_scan.setText("🔍 Scan Network for Pis")
+        self.btn_scan.setText("🔍 Scan Network for Hosts" if self._is_linux_mode() else "🔍 Scan Network for Pis")
         self.btn_scan.setEnabled(True)
         self._scan_results_by_ip = {item["ip"]: item for item in results}
         self.table.setRowCount(len(results))
@@ -887,7 +1268,7 @@ class DiscoverPiPage(QWizardPage):
 
     def _on_scan_failed(self, err: str) -> None:
         self.scan_progress.hide()
-        self.btn_scan.setText("🔍 Scan Network for Pis")
+        self.btn_scan.setText("🔍 Scan Network for Hosts" if self._is_linux_mode() else "🔍 Scan Network for Pis")
         self.btn_scan.setEnabled(True)
         if self.table.rowCount() == 1 and self.table.item(0, 0) and self.table.item(0, 0).text() == "Scanning...":
             self.table.setRowCount(0)
@@ -970,9 +1351,32 @@ def _load_wizard_config() -> dict:
             return {}
         if data.get("pi_pass_dpapi"):
             data["pi_pass"] = _dpapi_unprotect(str(data["pi_pass_dpapi"]))
+        hosts = data.get("hosts")
+        if isinstance(hosts, dict):
+            for h_cfg in hosts.values():
+                if isinstance(h_cfg, dict) and h_cfg.get("pi_pass_dpapi"):
+                    h_cfg["pi_pass"] = _dpapi_unprotect(str(h_cfg["pi_pass_dpapi"]))
         return data
     except Exception:
         return {}
+
+
+def _get_saved_host_creds(saved: dict, host: str) -> dict:
+    """Return saved credentials/settings for a specific host IP/name, or {} if none."""
+    key = (host or "").strip()
+    if not key:
+        return {}
+    hosts = saved.get("hosts")
+    if isinstance(hosts, dict) and isinstance(hosts.get(key), dict):
+        return dict(hosts[key])
+    if str(saved.get("pi_host", "")).strip() == key:
+        return {
+            "pi_user": saved.get("pi_user", ""),
+            "pi_pass": saved.get("pi_pass", ""),
+            "install_tailscale": saved.get("install_tailscale", True),
+            "storage_mode": saved.get("storage_mode", "sd"),
+        }
+    return {}
 
 
 def _save_wizard_config(
@@ -985,10 +1389,27 @@ def _save_wizard_config(
 ) -> None:
     p = _wizard_config_path()
     existing = _load_wizard_config()
+    host_key = host.strip()
+
+    # Strip decrypted runtime-only passwords before writing back to disk
+    existing.pop("pi_pass", None)
+    hosts_map = existing.get("hosts")
+    if not isinstance(hosts_map, dict):
+        hosts_map = {}
+    for h_cfg in hosts_map.values():
+        if isinstance(h_cfg, dict):
+            h_cfg.pop("pi_pass", None)
+
     if not remember:
-        # Clear Pi credentials but preserve optional Tariff & Solar Forecast preferences
-        for k in ("pi_host", "pi_user", "pi_pass_dpapi", "pi_pass", "install_tailscale", "storage_mode"):
-            existing.pop(k, None)
+        if host_key:
+            hosts_map.pop(host_key, None)
+        if str(existing.get("pi_host", "")).strip() == host_key or not host_key:
+            for k in ("pi_host", "pi_user", "pi_pass_dpapi", "install_tailscale", "storage_mode"):
+                existing.pop(k, None)
+        if hosts_map:
+            existing["hosts"] = hosts_map
+        else:
+            existing.pop("hosts", None)
         if existing:
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(json.dumps(existing, indent=2), encoding="utf-8")
@@ -998,11 +1419,19 @@ def _save_wizard_config(
             except Exception:
                 pass
         return
+
     p.parent.mkdir(parents=True, exist_ok=True)
-    existing.pop("pi_pass", None)
+    if host_key:
+        hosts_map[host_key] = {
+            "pi_user": user.strip(),
+            "pi_pass_dpapi": _dpapi_protect(password),
+            "install_tailscale": bool(install_tailscale),
+            "storage_mode": storage_mode,
+        }
+    existing["hosts"] = hosts_map
     existing.update(
         {
-            "pi_host": host.strip(),
+            "pi_host": host_key,
             "pi_user": user.strip(),
             "pi_pass_dpapi": _dpapi_protect(password),
             "install_tailscale": bool(install_tailscale),
@@ -1016,6 +1445,11 @@ def _update_wizard_config(updates: dict) -> None:
     p = _wizard_config_path()
     existing = _load_wizard_config()
     existing.pop("pi_pass", None)
+    hosts_map = existing.get("hosts")
+    if isinstance(hosts_map, dict):
+        for h_cfg in hosts_map.values():
+            if isinstance(h_cfg, dict):
+                h_cfg.pop("pi_pass", None)
     existing.update(updates)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(existing, indent=2), encoding="utf-8")
@@ -1033,8 +1467,8 @@ class CredentialsPage(QWizardPage):
 
         row_h = 32
 
-        grp_ssh = QGroupBox("Raspberry Pi SSH Connection")
-        form = QGridLayout(grp_ssh)
+        self.grp_ssh = QGroupBox("Raspberry Pi SSH Connection")
+        form = QGridLayout(self.grp_ssh)
         form.setVerticalSpacing(10)
         form.setHorizontalSpacing(12)
         form.setContentsMargins(14, 18, 14, 12)
@@ -1043,13 +1477,15 @@ class CredentialsPage(QWizardPage):
         self.inp_host = QLineEdit(os.environ.get("GIVENERGY_PI_HOST", "") or str(saved.get("pi_host", "")))
         self.inp_host.setPlaceholderText("e.g. 192.168.0.243 or givenergy-pi.local")
         self.inp_host.setFixedHeight(row_h)
-        self.inp_user = QLineEdit(os.environ.get("GIVENERGY_PI_USER", "") or str(saved.get("pi_user", "")))
+        host_creds = _get_saved_host_creds(saved, self.inp_host.text())
+        self.inp_user = QLineEdit(os.environ.get("GIVENERGY_PI_USER", "") or str(host_creds.get("pi_user", "")))
         self.inp_user.setPlaceholderText("Enter Raspberry Pi SSH username")
         self.inp_user.setFixedHeight(row_h)
-        self.inp_pass = QLineEdit(os.environ.get("GIVENERGY_PI_PASS", "") or str(saved.get("pi_pass", "")))
+        self.inp_pass = QLineEdit(os.environ.get("GIVENERGY_PI_PASS", "") or str(host_creds.get("pi_pass", "")))
         self.inp_pass.setPlaceholderText("Enter Raspberry Pi SSH password")
         self.inp_pass.setEchoMode(QLineEdit.Password)
         self.inp_pass.setFixedHeight(row_h)
+        self.inp_host.editingFinished.connect(lambda: self._apply_saved_creds_for_host(self.inp_host.text()))
 
         btn_show = QPushButton("Show")
         btn_show.setCheckable(True)
@@ -1087,7 +1523,7 @@ class CredentialsPage(QWizardPage):
         form.addLayout(pw_row, 2, 1)
         form.addWidget(self.chk_remember, 3, 0, 1, 2)
         form.addLayout(test_row, 4, 0, 1, 2)
-        layout.addWidget(grp_ssh)
+        layout.addWidget(self.grp_ssh)
 
         grp_ts = QGroupBox("Tailscale Remote Access (Recommended for Phone && Off-Site Access)")
         ts_layout = QGridLayout(grp_ts)
@@ -1218,9 +1654,10 @@ class CredentialsPage(QWizardPage):
             )
             return False
 
+        is_linux = bool(self.wizard() is not None and self.wizard().property("target_os") == "linux")
         warnings: list[str] = []
         model = info.get("MODEL", "")
-        if "raspberry pi" not in model.lower():
+        if not is_linux and "raspberry pi" not in model.lower():
             label = model or "generic Linux host"
             warnings.append(f"• Hardware does not appear to be a Raspberry Pi ({label}).")
 
@@ -1263,10 +1700,45 @@ class CredentialsPage(QWizardPage):
         )
         return super().validatePage()
 
+    def _apply_saved_creds_for_host(self, host: str, default_storage_idx: int | None = None) -> None:
+        creds = _get_saved_host_creds(_load_wizard_config(), host)
+        env_user = os.environ.get("GIVENERGY_PI_USER", "")
+        env_pass = os.environ.get("GIVENERGY_PI_PASS", "")
+        self.inp_user.setText(env_user or str(creds.get("pi_user", "")))
+        self.inp_pass.setText(env_pass or str(creds.get("pi_pass", "")))
+        if "install_tailscale" in creds:
+            self.chk_tailscale.setChecked(bool(creds["install_tailscale"]))
+        if "storage_mode" in creds:
+            idx = self.cmb_storage.findData(creds["storage_mode"])
+            if idx >= 0:
+                self.cmb_storage.setCurrentIndex(idx)
+        elif default_storage_idx is not None:
+            self.cmb_storage.setCurrentIndex(default_storage_idx)
+
     def initializePage(self) -> None:
+        is_linux = bool(self.wizard() is not None and self.wizard().property("target_os") == "linux")
+        if is_linux:
+            self.setTitle("Step 6: Linux Host SSH & Deployment Options")
+            self.setSubTitle("Confirm the target Linux host SSH login, storage mode, and optional Tailscale settings.")
+            self.grp_ssh.setTitle("Linux Host SSH Connection")
+            self.inp_host.setPlaceholderText("e.g. 192.168.0.150 or ubuntu-server.local")
+            self.inp_user.setPlaceholderText("Enter Linux SSH username (with sudo)")
+            self.inp_pass.setPlaceholderText("Enter Linux SSH password")
+            self.chk_tailscale.setText("Install && configure Tailscale on this Linux host")
+            self.chk_wipe_data.setText("Wipe existing telemetry history && saved hardware configuration on this Linux host")
+        else:
+            self.setTitle("Step 6: Pi Credentials & Remote Access")
+            self.setSubTitle("Confirm the target Raspberry Pi SSH login and optional Tailscale settings.")
+            self.grp_ssh.setTitle("Raspberry Pi SSH Connection")
+            self.inp_host.setPlaceholderText("e.g. 192.168.0.243 or givenergy-pi.local")
+            self.inp_user.setPlaceholderText("Enter Raspberry Pi SSH username")
+            self.inp_pass.setPlaceholderText("Enter Raspberry Pi SSH password")
+            self.chk_tailscale.setText("Install && configure Tailscale on this Pi")
+            self.chk_wipe_data.setText("Wipe existing telemetry history && saved hardware configuration on this Pi")
         detected = self.field("detected_ip")
         if detected and str(detected).strip():
             self.inp_host.setText(str(detected).strip())
+        self._apply_saved_creds_for_host(self.inp_host.text(), default_storage_idx=1 if is_linux else 0)
         self.completeChanged.emit()
         self.updateGeometry()
         if self.layout() is not None:
@@ -1352,7 +1824,7 @@ class _OctopusRateWorker(QThread):
 class TariffSetupPage(QWizardPage):
     def __init__(self) -> None:
         super().__init__()
-        self.setTitle("Step 3: Energy Tariff & Cost Monitoring (Optional)")
+        self.setTitle("Step 4: Energy Tariff & Cost Monitoring (Optional)")
         self.setSubTitle("Pre-configure your UK import & export tariff, or leave unchecked to keep existing Pi settings / configure later.")
         self._octopus_data: dict | None = None
         self._oct_worker: _OctopusFetchWorker | None = None
@@ -1362,7 +1834,7 @@ class TariffSetupPage(QWizardPage):
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
 
-        self.chk_enable = QCheckBox("Configure / overwrite UK Energy Tariff settings on this Pi")
+        self.chk_enable = QCheckBox("Configure / overwrite UK Energy Tariff settings on target host")
         self.chk_enable.setChecked(False)
         self.chk_enable.toggled.connect(self._on_toggle_enable)
         layout.addWidget(self.chk_enable)
@@ -1456,7 +1928,7 @@ class TariffSetupPage(QWizardPage):
         self.inp_imp_rate = QLineEdit("24.50")
         self.inp_imp_rate.setFixedHeight(row_h)
 
-        self.lbl_imp_offpeak = QLabel("Off-Peak Rate && Window:")
+        self.lbl_imp_offpeak = QLabel("Off-Peak Rate & Window:")
         self.wid_imp_offpeak = QWidget()
         self.wid_imp_offpeak.setFixedHeight(row_h)
         opl = QHBoxLayout(self.wid_imp_offpeak)
@@ -1770,7 +2242,7 @@ class TariffSetupPage(QWizardPage):
 
     def _on_octopus_rate_failed(self, side: str, err: str) -> None:
         rate_inp = self.inp_imp_rate if side == "imp" else self.inp_exp_rate
-        rate_inp.setText("Sync on Pi")
+        rate_inp.setText("Sync on Host")
         if side == "imp" and self.inp_standing.text() == "Fetching…":
             self.inp_standing.setText("60.00")
 
@@ -1912,7 +2384,7 @@ class SolarForecastSetupPage(QWizardPage):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setTitle("Step 4: Solar Forecasting via Open-Meteo (Optional)")
+        self.setTitle("Step 5: Solar Forecasting via Open-Meteo (Optional)")
         self.setSubTitle(
             "Pre-configure your solar array location & roof geometry for Open-Meteo forecasting, "
             "or leave unchecked to configure later in the web interface."
@@ -1921,7 +2393,7 @@ class SolarForecastSetupPage(QWizardPage):
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
 
-        self.chk_enable = QCheckBox("Configure / overwrite Solar Forecasting (Open-Meteo) settings on this Pi")
+        self.chk_enable = QCheckBox("Configure / overwrite Solar Forecasting (Open-Meteo) settings on target host")
         self.chk_enable.setChecked(False)
         self.chk_enable.toggled.connect(self._on_toggle_enable)
         layout.addWidget(self.chk_enable)
@@ -2232,11 +2704,57 @@ class SolarForecastSetupPage(QWizardPage):
             "last_sync_error": "",
         }
 
+    def nextId(self) -> int:
+        if self.wizard() is not None and self.wizard().property("target_os") == "windows":
+            return PAGE_DEPLOY
+        return PAGE_CREDS
+
+
+class WindowsDeployWorker(QThread):
+    log_line = Signal(str)
+    progress = Signal(int)
+    finished_deploy = Signal(bool, str, str, str)
+
+    def __init__(
+        self,
+        *,
+        port: int,
+        replace_iis: bool,
+        add_firewall_rule: bool,
+        wipe_existing_data: bool,
+        tariff_config_dict: dict | None = None,
+        solar_forecast_config_dict: dict | None = None,
+    ) -> None:
+        super().__init__()
+        self.port = port
+        self.replace_iis = replace_iis
+        self.add_firewall_rule = add_firewall_rule
+        self.wipe_existing_data = wipe_existing_data
+        self.tariff_config_dict = tariff_config_dict
+        self.solar_forecast_config_dict = solar_forecast_config_dict
+
+    def run(self) -> None:
+        try:
+            res = deploy_windows.install_windows_service(
+                port=self.port,
+                replace_iis=self.replace_iis,
+                add_firewall_rule=self.add_firewall_rule,
+                wipe_existing_data=self.wipe_existing_data,
+                tariff_config_dict=self.tariff_config_dict,
+                solar_forecast_config_dict=self.solar_forecast_config_dict,
+                log_cb=self.log_line.emit,
+                progress_cb=self.progress.emit,
+            )
+            self.finished_deploy.emit(True, res["local_url"], "", "")
+        except Exception as exc:
+            self.log_line.emit(f"\n[ERROR] {exc}")
+            self.finished_deploy.emit(False, "", "", "")
+
 
 class DeployProgressPage(QWizardPage):
     def __init__(self) -> None:
         super().__init__()
-        self.setTitle("Step 6: Provisioning & Installing GivEnergy Web Service")
+        self.setTitle("Step 7: Provisioning & Installing GivEnergy Web Service")
         self.setSubTitle("Configuring SD-safe RAM logging, Python environment, Tailscale, and systemd service.")
         self._worker: DeployWorker | None = None
         self._done_ok = False
@@ -2266,6 +2784,13 @@ class DeployProgressPage(QWizardPage):
         return self._done_ok
 
     def initializePage(self) -> None:
+        target_os = self.wizard().property("target_os") if self.wizard() is not None else "pi"
+        if target_os == "windows":
+            self.setSubTitle("Installing Windows Service, configuring firewall, and registering in Windows Settings.")
+        elif target_os == "linux":
+            self.setSubTitle("Configuring system logging, Python environment, Tailscale, and systemd service.")
+        else:
+            self.setSubTitle("Configuring SD-safe RAM logging, Python environment, Tailscale, and systemd service.")
         self._done_ok = False
         self.btn_ts_login.setVisible(False)
         self.btn_retry.setVisible(False)
@@ -2278,11 +2803,29 @@ class DeployProgressPage(QWizardPage):
         if self._worker and self._worker.isRunning():
             return
         self.btn_retry.setVisible(False)
-        tariff_page = self.wizard().page(2)
+        tariff_page = self.wizard().page(PAGE_TARIFF)
         tariff_cfg = tariff_page.build_tariff_config() if hasattr(tariff_page, "build_tariff_config") else None
-        solar_page = self.wizard().page(3)
+        solar_page = self.wizard().page(PAGE_SOLAR)
         solar_cfg = solar_page.build_solar_forecast_config() if hasattr(solar_page, "build_solar_forecast_config") else None
-        cred_page = self.wizard().page(4)
+        target_os = self.wizard().property("target_os") if self.wizard() is not None else "pi"
+
+        if target_os == "windows":
+            win_page = self.wizard().page(PAGE_WIN_PREP)
+            self._worker = WindowsDeployWorker(
+                port=win_page.selected_port() if hasattr(win_page, "selected_port") else 80,
+                replace_iis=win_page.replace_iis() if hasattr(win_page, "replace_iis") else False,
+                add_firewall_rule=bool(win_page.chk_firewall.isChecked()) if hasattr(win_page, "chk_firewall") else True,
+                wipe_existing_data=bool(win_page.chk_win_wipe.isChecked()) if hasattr(win_page, "chk_win_wipe") else False,
+                tariff_config_dict=tariff_cfg,
+                solar_forecast_config_dict=solar_cfg,
+            )
+            self._worker.log_line.connect(self.log_box.append)
+            self._worker.progress.connect(self.pbar.setValue)
+            self._worker.finished_deploy.connect(self._on_finished)
+            self._worker.start()
+            return
+
+        cred_page = self.wizard().page(PAGE_CREDS)
         storage_mode = cred_page.cmb_storage.currentData() if hasattr(cred_page, "cmb_storage") else "sd"
         self._worker = DeployWorker(
             host=str(self.field("pi_host")).strip(),
@@ -2346,6 +2889,13 @@ class FinishPage(QWizardPage):
 
     def initializePage(self) -> None:
         w = self.wizard()
+        target_os = w.property("target_os") if w is not None else "pi"
+        if target_os == "windows":
+            self.setSubTitle("This Windows PC is now running the GivEnergy Local Control Windows Service.")
+        elif target_os == "linux":
+            self.setSubTitle("Your Linux host is now running the GivEnergy Local Control & Historic Telemetry service.")
+        else:
+            self.setSubTitle("Your Raspberry Pi is now running the GivEnergy Local Control & Historic Telemetry service.")
         local_url = getattr(w, "deployed_local_url", "")
         ts_ip = getattr(w, "deployed_ts_ip", "")
         ts_dns = getattr(w, "deployed_ts_dns", "")
@@ -2428,9 +2978,11 @@ class UninstallWorker(QThread):
 
 
 class UninstallPiDialog(QDialog):
-    def __init__(self, initial_ip: str = "", parent: QWidget | None = None) -> None:
+    def __init__(self, initial_ip: str = "", target_os: str = "pi", parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Uninstall GivEnergy Local Control from Raspberry Pi")
+        self.target_os = target_os
+        host_noun = "Linux Host" if target_os == "linux" else "Raspberry Pi"
+        self.setWindowTitle(f"Uninstall GivEnergy Local Control from {host_noun}")
         self.resize(560, 440)
         self.uninstalled = False
         self._worker: UninstallWorker | None = None
@@ -2441,19 +2993,22 @@ class UninstallPiDialog(QDialog):
 
         intro = QLabel(
             "This will stop and remove <b>givenergy-web.service</b>, remove system service rules, "
-            "and delete <code>/opt/givenergy-web</code> from the target Raspberry Pi."
+            f"and delete <code>/opt/givenergy-web</code> from the target {host_noun}."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
         form = QFormLayout()
-        self.ip_edit = QLineEdit(initial_ip or str(saved.get("pi_host", "")))
+        target_ip = initial_ip or str(saved.get("pi_host", ""))
+        host_creds = _get_saved_host_creds(saved, target_ip)
+        self.ip_edit = QLineEdit(target_ip)
         self.ip_edit.setPlaceholderText("e.g. 192.168.1.50")
-        self.user_edit = QLineEdit(str(saved.get("pi_user", "pi") or "pi"))
-        self.pass_edit = QLineEdit(str(saved.get("pi_pass", "")))
+        self.user_edit = QLineEdit(str(host_creds.get("pi_user", "") or ""))
+        self.pass_edit = QLineEdit(str(host_creds.get("pi_pass", "")))
         self.pass_edit.setEchoMode(QLineEdit.Password)
-        self.chk_reset_ts = QCheckBox("Also reset Tailscale Funnel configuration on the Pi")
-        form.addRow("Pi IP / Hostname:", self.ip_edit)
+        self.ip_edit.editingFinished.connect(self._load_creds_for_ip)
+        self.chk_reset_ts = QCheckBox(f"Also reset Tailscale Funnel configuration on the {host_noun}")
+        form.addRow(f"{host_noun} IP / Hostname:", self.ip_edit)
         form.addRow("SSH Username:", self.user_edit)
         form.addRow("SSH Password:", self.pass_edit)
         form.addRow("", self.chk_reset_ts)
@@ -2476,12 +3031,18 @@ class UninstallPiDialog(QDialog):
         btn_row.addWidget(self.btn_start)
         layout.addLayout(btn_row)
 
+    def _load_creds_for_ip(self) -> None:
+        creds = _get_saved_host_creds(_load_wizard_config(), self.ip_edit.text())
+        self.user_edit.setText(str(creds.get("pi_user", "") or ""))
+        self.pass_edit.setText(str(creds.get("pi_pass", "")))
+
     def _on_start_clicked(self) -> None:
         host = self.ip_edit.text().strip()
         user = self.user_edit.text().strip() or "pi"
         password = self.pass_edit.text()
         if not host or not password:
-            QMessageBox.warning(self, "Missing Details", "Please enter both the Raspberry Pi IP/hostname and SSH password.")
+            host_noun = "Linux host" if self.target_os == "linux" else "Raspberry Pi"
+            QMessageBox.warning(self, "Missing Details", f"Please enter both the {host_noun} IP/hostname and SSH password.")
             return
 
         # 1. Confirmation
@@ -2566,6 +3127,107 @@ class UninstallPiDialog(QDialog):
             QMessageBox.critical(self, "Uninstall Failed", f"{msg}\n\nCheck the log output for details.")
 
 
+class UninstallWindowsDialog(QDialog):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Uninstall GivEnergy Local Control (Windows Service)")
+        self.resize(520, 360)
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        lbl = QLabel(
+            "This will stop and remove the <b>GivEnergyLocalControl</b> Windows Service, "
+            "remove the Windows Firewall rule, remove the Windows Settings entry, and delete installed files."
+        )
+        lbl.setWordWrap(True)
+        layout.addWidget(lbl)
+
+        self.chk_remove_data = QCheckBox("Also delete %ProgramData%\\GivEnergyLocalControl (database && config)")
+        self.chk_remove_data.setChecked(True)
+        layout.addWidget(self.chk_remove_data)
+
+        self.log_box = QTextEdit()
+        self.log_box.setReadOnly(True)
+        self.log_box.setPlaceholderText("Uninstall progress log will appear here...")
+        layout.addWidget(self.log_box, 1)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        self.btn_close = QPushButton("Cancel")
+        self.btn_close.clicked.connect(self.reject)
+        self.btn_uninstall = QPushButton("🗑 Uninstall...")
+        self.btn_uninstall.setObjectName("dangerBtn")
+        self.btn_uninstall.clicked.connect(self._on_uninstall)
+        btn_row.addWidget(self.btn_close)
+        btn_row.addWidget(self.btn_uninstall)
+        layout.addLayout(btn_row)
+
+    def _on_uninstall(self) -> None:
+        if not deploy_windows.is_admin():
+            import ctypes
+
+            exe = sys.executable
+            params = "--uninstall-windows" if getattr(sys, "frozen", False) else f'"{Path(__file__).resolve()}" --uninstall-windows'
+            rc = ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, params, None, 1)
+            if rc > 32:
+                self.reject()
+            else:
+                QMessageBox.warning(self, "Administrator Required", "Administrator privileges are required to uninstall.")
+            return
+
+        confirm = QMessageBox.question(
+            self,
+            "Confirm Uninstall",
+            "Are you sure you want to uninstall GivEnergy Local Control from this Windows PC?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+
+        data_dir = deploy_windows.get_data_root() / "data"
+        has_data = data_dir.exists() and any(data_dir.iterdir())
+        if has_data:
+            ask_b = QMessageBox.question(
+                self,
+                "Take Backup First?",
+                "Would you like to save a backup (.zip) of your configuration and historic database before uninstalling?",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                QMessageBox.Yes,
+            )
+            if ask_b == QMessageBox.Cancel:
+                return
+            if ask_b == QMessageBox.Yes:
+                stamp = time.strftime("%Y%m%d-%H%M%S")
+                chosen, _ = QFileDialog.getSaveFileName(
+                    self,
+                    "Save Pre-Uninstall Backup",
+                    f"givenergy-backup-windows-{stamp}.zip",
+                    "Zip Archives (*.zip)",
+                )
+                if not chosen:
+                    return
+                try:
+                    deploy_windows.backup_from_windows(Path(chosen), log_cb=self.log_box.append)
+                except Exception as exc:
+                    QMessageBox.critical(self, "Backup Failed", f"Backup failed:\n{exc}")
+                    return
+
+        self.btn_uninstall.setEnabled(False)
+        self.btn_close.setEnabled(False)
+        try:
+            deploy_windows.uninstall_windows_service(
+                remove_data=self.chk_remove_data.isChecked(),
+                log_cb=self.log_box.append,
+            )
+            QMessageBox.information(self, "Uninstall Complete", "GivEnergy Local Control has been uninstalled.")
+            self.accept()
+        except Exception as exc:
+            self.btn_uninstall.setEnabled(True)
+            self.btn_close.setEnabled(True)
+            QMessageBox.critical(self, "Uninstall Failed", str(exc))
+
+
 def _app_icon() -> QIcon:
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
     for rel in ("givenergy_web/static/icon.ico", "givenergy_web/static/icon-512.png"):
@@ -2578,23 +3240,28 @@ def _app_icon() -> QIcon:
 class GivEnergyDeploymentWizard(QWizard):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle(f"GivEnergy Raspberry Pi Deployment Wizard v{APP_VERSION}")
+        self.setWindowTitle(f"GivEnergy Local Control Deployment Wizard v{APP_VERSION}")
         self.setWindowIcon(_app_icon())
         self.setWizardStyle(QWizard.ClassicStyle)
         self.resize(880, 830)
         self.setMinimumSize(850, 780)
+        self.setProperty("target_os", "pi")
         self.deployed_local_url = ""
         self.deployed_ts_ip = ""
         self.deployed_ts_dns = ""
         self.deployed_ts_auth_url = ""
 
-        self.addPage(OSPrepPage())
-        self.addPage(DiscoverPiPage())
-        self.addPage(TariffSetupPage())
-        self.addPage(SolarForecastSetupPage())
-        self.addPage(CredentialsPage())
-        self.addPage(DeployProgressPage())
-        self.addPage(FinishPage())
+        self.setPage(PAGE_PLATFORM, TargetPlatformPage())
+        self.setPage(PAGE_PI_PREP, OSPrepPage())
+        self.setPage(PAGE_LINUX_PREP, LinuxPrepPage())
+        self.setPage(PAGE_WIN_PREP, WindowsPrepPage())
+        self.setPage(PAGE_DISCOVER, DiscoverPiPage())
+        self.setPage(PAGE_TARIFF, TariffSetupPage())
+        self.setPage(PAGE_SOLAR, SolarForecastSetupPage())
+        self.setPage(PAGE_CREDS, CredentialsPage())
+        self.setPage(PAGE_DEPLOY, DeployProgressPage())
+        self.setPage(PAGE_FINISH, FinishPage())
+        self.setStartId(PAGE_PLATFORM)
         self.currentIdChanged.connect(self._hide_top_back_arrow)
 
     def showEvent(self, event) -> None:
@@ -2609,10 +3276,21 @@ class GivEnergyDeploymentWizard(QWizard):
 
 
 def main() -> int:
+    if "--service" in sys.argv:
+        return windows_service.run_as_windows_service()
+    if "--console" in sys.argv:
+        return windows_service.run_console()
+
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setWindowIcon(_app_icon())
     app.setStyleSheet(WIZARD_STYLESHEET)
+
+    if "--uninstall-windows" in sys.argv:
+        dlg = UninstallWindowsDialog()
+        dlg.show()
+        return app.exec()
+
     wiz = GivEnergyDeploymentWizard()
     wiz.show()
     return app.exec()

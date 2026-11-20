@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>GivEnergy Local Control — Raspberry Pi Telemetry &amp; Historic Server</title>
+  <title>GivEnergy Local Control — Local Telemetry &amp; Historic Server</title>
   <link rel="manifest" href="/manifest.json" />
   <link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png" />
   <link rel="apple-touch-icon" href="/static/icon-192.png" />
@@ -730,8 +730,8 @@
     <div class="brand">
       <div class="brand-icon">⚡</div>
       <div>
-        <div class="brand-title" id="hdr-title"><span id="hdr-title-text">GivEnergy Local Control &amp; Historic Server</span> <span id="hdr-version" style="font-size:11px; font-weight:600; color:#93C5FD; background:#111827; border:1px solid #2E3F5E; border-radius:999px; padding:1px 7px; margin-left:6px; vertical-align:middle;">v1.5.0</span></div>
-        <div class="brand-sub" id="hdr-sub">Raspberry Pi • Auto-Adaptive Local Telemetry &amp; Control</div>
+        <div class="brand-title" id="hdr-title"><span id="hdr-title-text">GivEnergy Local Control &amp; Historic Server</span> <span id="hdr-version" style="font-size:11px; font-weight:600; color:#93C5FD; background:#111827; border:1px solid #2E3F5E; border-radius:999px; padding:1px 7px; margin-left:6px; vertical-align:middle;">v2.0.0</span></div>
+        <div class="brand-sub" id="hdr-sub">Auto-Adaptive Local Telemetry &amp; Control</div>
       </div>
     </div>
 
@@ -740,7 +740,7 @@
       <div class="pill" id="pill-inv"><span class="dot"></span><span id="txt-inv">Inverter: —</span></div>
       <div class="pill" id="pill-bat"><span class="dot"></span><span id="txt-bat">Battery: —</span></div>
       <div class="pill" id="pill-evc"><span class="dot"></span><span id="txt-evc">EV Charger: —</span></div>
-      <div class="pill" id="pill-pi"><span class="dot"></span><span id="txt-pi">Pi: —</span></div>
+      <div class="pill" id="pill-pi"><span class="dot"></span><span id="txt-pi">Host: —</span></div>
       <button class="btn primary" onclick="triggerPollNow()">⟳ Poll Now</button>
     </div>
   </header>
@@ -811,7 +811,7 @@
         <button class="tab-btn" id="tab-btn-evc" onclick="switchTab('evc', this)">🚗 EV Charger</button>
         <button class="tab-btn" onclick="switchTab('grid', this)">🔌 Grid Voltage History</button>
         <button class="tab-btn" id="tab-btn-details" onclick="switchTab('details', this)">📋 Registers</button>
-        <button class="tab-btn" id="tab-btn-pi" onclick="switchTab('pi', this)">🍓 Pi System</button>
+        <button class="tab-btn" id="tab-btn-pi" onclick="switchTab('pi', this)">🖥️ System</button>
         <button class="tab-btn" onclick="switchTab('settings', this)">⚙ Property Setup</button>
       </nav>
 
@@ -857,7 +857,7 @@
         <div class="panel">
           <div class="panel-header">
             <div>
-              <div class="panel-title">Historic Time-Series Explorer (SQLite WAL Database on Raspberry Pi 5)</div>
+              <div class="panel-title">Historic Time-Series Explorer (SQLite WAL Database)</div>
               <div class="panel-sub" id="hist-db-subtitle">1-minute intraday granularity + 5-minute multi-month rollups + daily energy ledger</div>
             </div>
             <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
@@ -1734,11 +1734,11 @@
         </div>
       </section>
 
-      <!-- TAB 6: RASPBERRY PI HEALTH & MAINTENANCE -->
+      <!-- TAB 6: HOST SYSTEM HEALTH & MAINTENANCE -->
       <section class="tab-pane" id="tab-pi">
         <div class="two-col">
           <div class="panel">
-            <div class="panel-title" id="title-pi-health" style="margin-bottom:10px;">🍓 Raspberry Pi Hardware &amp; OS Health</div>
+            <div class="panel-title" id="title-pi-health" style="margin-bottom:10px;">🖥️ Host Hardware &amp; OS Health</div>
             <table class="kv-table" id="tbl-pi-health"></table>
           </div>
           <div class="panel">
@@ -1776,21 +1776,21 @@
           <pre id="app-update-log" style="display:none; background:#090D16; border:1px solid #1F2A40; border-radius:8px; padding:12px; color:#CBD5E1; font-size:12px; max-height:240px; overflow:auto; white-space:pre-wrap; margin:0;"></pre>
         </div>
 
-        <div class="panel" style="margin-top:16px;">
+        <div class="panel" id="panel-sys-actions" style="margin-top:16px;">
           <div class="panel-header">
             <div>
-              <div class="panel-title">🛠 Raspberry Pi System Actions &amp; Maintenance</div>
-              <div class="panel-sub">Restart, shut down, or install Raspberry Pi OS software updates directly from this dashboard</div>
+              <div class="panel-title" id="title-sys-actions">🛠 System Actions &amp; Maintenance</div>
+              <div class="panel-sub" id="sub-sys-actions">Restart, shut down, or install OS software updates directly from this dashboard</div>
             </div>
           </div>
           <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px;">
             <button class="btn primary" id="btn-pi-update" onclick="runPiAction('update')">⬆ Check &amp; Install Software Updates</button>
-            <button class="btn warn" id="btn-pi-reboot" onclick="runPiAction('reboot')">🔄 Restart Pi</button>
-            <button class="btn danger" id="btn-pi-shutdown" onclick="runPiAction('shutdown')">⏻ Shut Down Pi</button>
+            <button class="btn warn" id="btn-pi-reboot" onclick="runPiAction('reboot')">🔄 Restart Host</button>
+            <button class="btn danger" id="btn-pi-shutdown" onclick="runPiAction('shutdown')">⏻ Shut Down Host</button>
           </div>
           <div id="pi-reboot-banner" style="display:none; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; background:rgba(245, 158, 11, 0.14); border:1px solid rgba(245, 158, 11, 0.45); border-radius:8px; padding:10px 14px; margin-bottom:12px;">
             <span id="pi-reboot-banner-text" style="color:#FDE68A; font-size:12.5px; font-weight:600;">⚠ A reboot is required to finish applying system updates.</span>
-            <button class="btn warn" onclick="runPiAction('reboot')">🔄 Restart Pi Now</button>
+            <button class="btn warn" id="btn-pi-reboot-now" onclick="runPiAction('reboot')">🔄 Restart Now</button>
           </div>
           <div id="pi-update-progress-wrap" style="display:none; margin-bottom:10px;">
             <div style="display:flex; justify-content:space-between; font-size:12px; color:#93C5FD; margin-bottom:5px;">
@@ -1812,7 +1812,7 @@
             <div class="panel-header">
               <div>
                 <div class="panel-title">🏠 Property Hardware Configuration</div>
-                <div class="panel-sub">Saved to `property_config.json` on the Pi — applies immediately without restarting the service</div>
+                <div class="panel-sub">Saved to `property_config.json` on the host — applies immediately without restarting the service</div>
               </div>
             </div>
             <div class="ctrl-group">
@@ -2125,7 +2125,7 @@
           <div class="panel-title">📜 Server Event &amp; Command Log</div>
         </div>
         <div class="event-list" id="event-log-box">
-          <div class="event-item info">Connecting to Raspberry Pi WebSocket…</div>
+          <div class="event-item info">Connecting to local telemetry WebSocket…</div>
         </div>
       </div>
     </aside>
@@ -2290,30 +2290,71 @@
         setPill('pill-evc', 'txt-evc', 'err', 'EV: Offline');
       }
 
-      if (sys.app_version) {
-        const verEl = document.getElementById('hdr-version');
-        if (verEl) verEl.textContent = `v${sys.app_version}`;
-        const curAppVer = document.getElementById('app-cur-ver');
-        if (curAppVer) curAppVer.textContent = `v${sys.app_version}`;
-      }
-      if (sys.hardware_short) {
-        const piTabBtn = document.getElementById('tab-btn-pi');
-        if (piTabBtn) piTabBtn.textContent = `🍓 ${sys.hardware_short}`;
-        const piTitle = document.getElementById('title-pi-health');
-        if (piTitle) {
-          const modelLabel = sys.hardware_model || 'Raspberry Pi';
-          const hostLabel = sys.hostname || 'local';
-          piTitle.textContent = `🍓 ${modelLabel} Hardware & OS Health (${hostLabel})`;
+      if (data.system && data.system.hostname) {
+        if (sys.app_version) {
+          const verEl = document.getElementById('hdr-version');
+          if (verEl) verEl.textContent = `v${sys.app_version}`;
+          const curAppVer = document.getElementById('app-cur-ver');
+          if (curAppVer) curAppVer.textContent = `v${sys.app_version}`;
         }
-      }
-      if (typeof sys.reboot_required === 'boolean') {
-        updateRebootBanner(sys.reboot_required, sys.reboot_pkgs || []);
-      }
+        const sysCaps = sys.capabilities || {};
+        const isPi = ('is_raspberry_pi' in sysCaps) ? Boolean(sysCaps.is_raspberry_pi) : Boolean(sys.is_raspberry_pi);
+        const isWin = sysCaps.platform === 'windows';
+        window._isRaspberryPiHost = isPi;
+        window._supportsAppUpdates = sysCaps.supports_app_updates !== false;
+        const hostIcon = isPi ? '🍓' : (isWin ? '🪟' : '🖥️');
+        const hostNoun = isPi ? 'Raspberry Pi' : (isWin ? 'Windows Service' : 'Linux Host');
+        const sysActionsPanel = document.getElementById('panel-sys-actions');
+        if (sysActionsPanel) {
+          const showActions = (sysCaps.supports_os_updates !== false) || (sysCaps.supports_power_actions !== false);
+          sysActionsPanel.style.display = showActions ? '' : 'none';
+        }
+        if (!window._supportsAppUpdates) {
+          const btnAppInstall = document.getElementById('btn-app-install');
+          if (btnAppInstall) btnAppInstall.style.display = 'none';
+        }
+        const hdrSub = document.getElementById('hdr-sub');
+        if (hdrSub) {
+          hdrSub.textContent = `${isPi ? 'Raspberry Pi' : (sys.hardware_short || 'Host')} • Auto-Adaptive Local Telemetry & Control`;
+        }
+        if (sys.hardware_short) {
+          const piTabBtn = document.getElementById('tab-btn-pi');
+          if (piTabBtn) piTabBtn.textContent = `${hostIcon} ${sys.hardware_short}`;
+          const piTitle = document.getElementById('title-pi-health');
+          if (piTitle) {
+            const modelLabel = sys.hardware_model || hostNoun;
+            const hostLabel = sys.hostname || 'local';
+            piTitle.textContent = `${hostIcon} ${modelLabel} Hardware & OS Health (${hostLabel})`;
+          }
+        }
+        const sysActTitle = document.getElementById('title-sys-actions');
+        if (sysActTitle) sysActTitle.textContent = `🛠 ${hostNoun} System Actions & Maintenance`;
+        const sysActSub = document.getElementById('sub-sys-actions');
+        if (sysActSub) {
+          sysActSub.textContent = isPi
+            ? 'Restart, shut down, or install Raspberry Pi OS software updates directly from this dashboard'
+            : 'Restart, shut down, or install OS software updates directly from this dashboard';
+        }
+        const btnReboot = document.getElementById('btn-pi-reboot');
+        if (btnReboot) btnReboot.textContent = isPi ? '🔄 Restart Pi' : '🔄 Restart Host';
+        const btnShutdown = document.getElementById('btn-pi-shutdown');
+        if (btnShutdown) btnShutdown.textContent = isPi ? '⏻ Shut Down Pi' : '⏻ Shut Down Host';
+        const btnRebootNow = document.getElementById('btn-pi-reboot-now');
+        if (btnRebootNow) btnRebootNow.textContent = isPi ? '🔄 Restart Pi Now' : '🔄 Restart Now';
 
-      if (sys.cpu_temp_c != null) {
+        if (typeof sys.reboot_required === 'boolean') {
+          updateRebootBanner(sys.reboot_required, sys.reboot_pkgs || []);
+        }
+
         const dbFlushes = sys.database ? sys.database.total_disk_flushes : 0;
-        const hwShort = sys.hardware_short || 'Pi';
-        setPill('pill-pi', 'txt-pi', 'ok', `${hwShort}: ${sys.cpu_temp_c}°C • DB Flushes: ${dbFlushes}`);
+        const hwShort = sys.hardware_short || (isPi ? 'Pi' : 'Host');
+        if (sys.cpu_temp_c != null) {
+          setPill('pill-pi', 'txt-pi', 'ok', `${hwShort}: ${sys.cpu_temp_c}°C • DB Flushes: ${dbFlushes}`);
+        } else if (sys.cpu_usage_pct != null) {
+          setPill('pill-pi', 'txt-pi', 'ok', `${hwShort}: ${sys.cpu_usage_pct}% CPU • DB Flushes: ${dbFlushes}`);
+        } else {
+          setPill('pill-pi', 'txt-pi', 'ok', `${hwShort} • DB Flushes: ${dbFlushes}`);
+        }
       }
 
       document.getElementById('live-updated-pill').textContent =
@@ -3725,7 +3766,7 @@
     }
 
     // =========================================================================
-    // Complete Register Tables & Pi 5 Server Health
+    // Complete Register Tables & Host Server Health
     // =========================================================================
     function updateDetailsTab(inv, bat, evc, sys) {
       const invRows = [
@@ -3764,15 +3805,24 @@
 
       if (sys && sys.hostname) {
         const piRows = [
-          ['App Version', `v${sys.app_version || '1.5.0'}`],
-          ['Hostname & Hardware', `${sys.hostname} (${sys.hardware_model || 'Raspberry Pi'})`],
+          ['App Version', `v${sys.app_version || '2.0.0'}`],
+          ['Hostname & Hardware', `${sys.hostname} (${sys.hardware_model || 'Host'})`],
           ['Operating System & Python', `${sys.os_release} • Python ${sys.python_version}`],
-          ['CPU Temperature', `${sys.cpu_temp_c ?? '—'} °C`],
-          ['CPU Load Average (1m / 5m / 15m)', (sys.load_avg || []).join(' / ')],
-          ['System RAM Usage', `${sys.mem_used_mb} MB / ${sys.mem_total_mb} MB (${sys.mem_pct}%)`],
-          ['MicroSD Storage Usage', `${sys.disk_used_gb} GB / ${sys.disk_total_gb} GB (${sys.disk_free_gb} GB Free)`],
-          ['Service Uptime & Active Clients', `${sys.service_uptime_str} • ${sys.ws_clients} WebSocket client(s)`],
         ];
+        if (sys.cpu_usage_pct != null) {
+          piRows.push(['CPU Usage', `${sys.cpu_usage_pct}%`]);
+        }
+        if (sys.cpu_temp_c != null) {
+          piRows.push(['CPU Temperature', `${sys.cpu_temp_c} °C`]);
+        }
+        if (Array.isArray(sys.load_avg) && sys.load_avg.length > 0) {
+          piRows.push(['CPU Load Average (1m / 5m / 15m)', sys.load_avg.join(' / ')]);
+        }
+        piRows.push(
+          ['System RAM Usage', `${sys.mem_used_mb} MB / ${sys.mem_total_mb} MB (${sys.mem_pct}%)`],
+          [sys.storage_type ? `${sys.storage_type} Storage Usage` : 'Storage Usage', `${sys.disk_used_gb} GB / ${sys.disk_total_gb} GB (${sys.disk_free_gb} GB Free)`],
+          ['Service Uptime & Active Clients', `${sys.service_uptime_str} • ${sys.ws_clients} WebSocket client(s)`],
+        );
         document.getElementById('tbl-pi-health').innerHTML = piRows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('');
 
         const db = sys.database || {};
@@ -4129,9 +4179,10 @@
     }
 
     async function runPiAction(action) {
+      const hostLabel = window._isRaspberryPiHost ? 'Raspberry Pi' : 'Linux host';
       const labels = {
-        reboot: 'Restart the Raspberry Pi now? The dashboard will briefly disconnect.',
-        shutdown: 'Shut down the Raspberry Pi now? You will need to power-cycle it to turn it back on.',
+        reboot: `Restart the ${hostLabel} now? The dashboard will briefly disconnect.`,
+        shutdown: `Shut down the ${hostLabel} now? You will need to power-cycle or wake it to turn it back on.`,
       };
       if (labels[action] && !confirm(labels[action])) return;
 
@@ -4164,7 +4215,7 @@
 
       btnReboot.disabled = true;
       btnShutdown.disabled = true;
-      logBox.textContent = `Sending ${action} command to Raspberry Pi...`;
+      logBox.textContent = `Sending ${action} command to ${hostLabel}...`;
       try {
         const res = await fetch(`/api/system/${action}`, { method: 'POST' });
         const data = await res.json();
@@ -4215,7 +4266,7 @@
           commitEl.textContent = `Commit ${data.latest_commit_sha}${msg}`;
         }
         if (btnInstall) {
-          btnInstall.style.display = data.update_available ? 'inline-flex' : 'none';
+          btnInstall.style.display = (data.update_available && window._supportsAppUpdates !== false) ? 'inline-flex' : 'none';
         }
         badgeEl.style.display = 'inline-block';
         if (data.update_available) {

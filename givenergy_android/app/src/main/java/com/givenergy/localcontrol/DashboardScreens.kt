@@ -1056,12 +1056,13 @@ fun SystemScreen(
         }
 
         item {
-            SectionCard(title = "🍓 Raspberry Pi Health") {
+            SectionCard(title = if (sys.isRaspberryPi) "🍓 Raspberry Pi Health" else "🖥️ Host System Health") {
                 StatRow("Hostname", sys.hostname.ifBlank { "—" })
-                StatRow("Hardware", sys.hardwareModel.ifBlank { "Raspberry Pi" })
+                StatRow("Hardware", sys.hardwareModel.ifBlank { if (sys.isRaspberryPi) "Raspberry Pi" else "Linux Host" })
                 StatRow("App Version", if (sys.appVersion.isNotBlank()) "v${sys.appVersion}" else "—")
                 StatRow("CPU Temperature", sys.cpuTempC?.let { "$it °C" } ?: "—")
-                StatRow("RAM / Disk Usage", "${sys.memPct.roundToInt()}% RAM  •  ${sys.diskPct.roundToInt()}% Disk")
+                val diskLabel = sys.storageType.ifBlank { "Disk" }
+                StatRow("RAM / $diskLabel Usage", "${sys.memPct.roundToInt()}% RAM  •  ${sys.diskPct.roundToInt()}% $diskLabel")
                 StatRow("Service Uptime", sys.uptimeStr.ifBlank { "—" })
                 Spacer(Modifier.height(10.dp))
                 OutlinedButton(onClick = onReconnectDevices, modifier = Modifier.fillMaxWidth()) {

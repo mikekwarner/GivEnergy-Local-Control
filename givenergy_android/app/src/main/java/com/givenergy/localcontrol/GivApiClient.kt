@@ -85,9 +85,14 @@ class GivApiClient {
         }
     }
 
-    fun fetchIntradayHistory(): JSONObject? {
+    fun fetchIntradayHistory(date: String? = null): JSONObject? {
         if (activeBaseUrl.isBlank()) return null
-        val req = buildAuthorizedRequest("/api/history/intraday").get().build()
+        val path = if (!date.isNullOrBlank()) {
+            "/api/history/intraday?date=${java.net.URLEncoder.encode(date, "UTF-8")}"
+        } else {
+            "/api/history/intraday"
+        }
+        val req = buildAuthorizedRequest(path).get().build()
         return apiHttp.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) return null
             val body = resp.body?.string() ?: return null
@@ -95,9 +100,14 @@ class GivApiClient {
         }
     }
 
-    fun fetchRangeHistory(days: Int): JSONObject? {
+    fun fetchRangeHistory(days: Int, endDate: String? = null): JSONObject? {
         if (activeBaseUrl.isBlank()) return null
-        val req = buildAuthorizedRequest("/api/history/range?days=$days").get().build()
+        val path = if (!endDate.isNullOrBlank()) {
+            "/api/history/range?days=$days&end_date=${java.net.URLEncoder.encode(endDate, "UTF-8")}"
+        } else {
+            "/api/history/range?days=$days"
+        }
+        val req = buildAuthorizedRequest(path).get().build()
         return apiHttp.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) return null
             val body = resp.body?.string() ?: return null

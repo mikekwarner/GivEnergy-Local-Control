@@ -665,8 +665,10 @@ fun EvChargerScreen(
 fun HistoryScreen(
     state: PlantUiState,
     onSelectRange: (Int) -> Unit,
+    onSelectEndDate: (String) -> Unit,
     onReloadHistory: () -> Unit,
 ) {
+    val context = LocalContext.current
     var showSolar by remember { mutableStateOf(true) }
     var showLoad by remember { mutableStateOf(true) }
     var showBat by remember { mutableStateOf(true) }
@@ -674,8 +676,23 @@ fun HistoryScreen(
     var showSoc by remember { mutableStateOf(true) }
     var selectedIdx by remember { mutableStateOf<Int?>(null) }
 
+    val sdf = remember { SimpleDateFormat("yyyy-MM-dd", Locale.US) }
+    val todayIso = remember { sdf.format(Calendar.getInstance().time) }
+    val activeEndDate = state.historyEndDate.ifBlank { todayIso }
+    val isAtToday = activeEndDate >= todayIso
+
+    fun shiftEndDate(deltaDays: Int) {
+        val cal = Calendar.getInstance()
+        runCatching {
+            sdf.parse(activeEndDate)?.let { cal.time = it }
+        }
+        cal.add(Calendar.DAY_OF_YEAR, deltaDays)
+        val candidate = sdf.format(cal.time)
+        onSelectEndDate(if (candidate >= todayIso) "" else candidate)
+    }
+
     val series = state.historySeries
-    LaunchedEffect(series.size, state.historyRangeDays) {
+    LaunchedEffect(series.size, state.historyRangeDays, state.historyEndDate) {
         selectedIdx = null
     }
 
@@ -691,8 +708,8 @@ fun HistoryScreen(
             SectionCard(
                 title = "📈 Historical Time Series",
                 subtitle = when (state.historyRangeDays) {
-                    1 -> "Today (1-min resolution, ${series.size} pts)"
-                    else -> "Last ${state.historyRangeDays} Days (${series.size} pts)"
+                    1 -> "${if (isAtToday) "Today" else activeEndDate} (1-min resolution, ${series.size} pts)"
+                    else -> "${state.historyRangeDays} Days ending ${if (isAtToday) "Today" else activeEndDate} (${series.size} pts)"
                 },
             ) {
                 Row(
@@ -700,7 +717,7 @@ fun HistoryScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    listOf(1 to "Today", 7 to "7 Days", 30 to "30 Days").forEach { (days, label) ->
+                    listOf(1 to "1 Day", 7 to "7 Days", 30 to "30 Days").forEach { (days, label) ->
                         FilterChip(
                             selected = state.historyRangeDays == days,
                             onClick = { onSelectRange(days) },
@@ -710,6 +727,47 @@ fun HistoryScreen(
                     }
                     Spacer(Modifier.weight(1f))
                     OutlinedButton(onClick = onReloadHistory) { Text("↻", fontSize = 14.sp) }
+                }
+
+                Spacer(Modifier.height(4.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    OutlinedButton(
+                        onClick = { shiftEndDate(-state.historyRangeDays) },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("◀ Prev", fontSize = 12.sp, maxLines = 1)
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            val cal = Calendar.getInstance()
+                            runCatching { sdf.parse(activeEndDate)?.let { cal.time = it } }
+                            android.app.DatePickerDialog(
+                                context,
+                                { _, y, m, d ->
+                                    val picked = String.format(Locale.US, "%04d-%02d-%02d", y, m + 1, d)
+                                    onSelectEndDate(if (picked >= todayIso) "" else picked)
+                                },
+                                cal.get(Calendar.YEAR),
+                                cal.get(Calendar.MONTH),
+                                cal.get(Calendar.DAY_OF_MONTH),
+                            ).show()
+                        },
+                        modifier = Modifier.weight(1.3f),
+                    ) {
+                        Text(if (isAtToday) "📅 Today" else "📅 $activeEndDate", fontSize = 11.5.sp, maxLines = 1)
+                    }
+                    OutlinedButton(
+                        onClick = { shiftEndDate(state.historyRangeDays) },
+                        enabled = !isAtToday,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Next ▶", fontSize = 12.sp, maxLines = 1)
+                    }
                 }
 
                 Spacer(Modifier.height(4.dp))
@@ -1232,64 +1290,10 @@ fun CostsScreen(
     onRefreshCosts: () -> Unit,
     onSelectCostPeriod: (String) -> Unit,
     onOpenTariffWebSetup: () -> Unit,
-    onCheckTariff: (region: String, postcode: String, standingChargeP: Double, imp: TariffSideConfigModel, exp: TariffSideConfigModel, days: Int) -> Unit,
-    onSaveNewTariff: (region: String, postcode: String, standingChargeP: Double, imp: TariffSideConfigModel, exp: TariffSideConfigModel, effectiveFrom: String) -> Unit,
-    onRemoveTariffHistory: (entryId: String) -> Unit,
-    onDismissCheckPreview: () -> Unit,
 ) {
     val cs = state.costSummary
-    val te = state.tariffEditor
     val sym = cs.currencySymbol
     val sub = cs.subUnitSymbol
-    val context = LocalContext.current
-
-    var showEditor by remember { mutableStateOf(false) }
-    var showSaveDateDialog by remember { mutableStateOf(false) }
-    var pendingDeleteEntry by remember { mutableStateOf<TariffHistoryEntryModel?>(null) }
-
-    var draftRegion by remember(te.loaded, te.region) { mutableStateOf(te.region) }
-    var draftPostcode by remember(te.loaded, te.postcode) { mutableStateOf(te.postcode) }
-    var draftStandingP by remember(te.loaded, te.standingChargeP) { mutableStateOf(String.format(Locale.US, "%.2f", te.standingChargeP)) }
-
-    var draftImpMode by remember(te.loaded, te.importTariff) { mutableStateOf(te.importTariff.mode) }
-    var draftImpPresetId by remember(te.loaded, te.importTariff) { mutableStateOf(te.importTariff.presetId) }
-    var draftImpLabel by remember(te.loaded, te.importTariff) { mutableStateOf(te.importTariff.label) }
-    var draftImpDescription by remember(te.loaded, te.importTariff) { mutableStateOf(te.importTariff.description) }
-    var draftImpOctopusCode by remember(te.loaded, te.importTariff) { mutableStateOf(te.importTariff.octopusProductCode) }
-    var draftImpRateP by remember(te.loaded, te.importTariff) { mutableStateOf(String.format(Locale.US, "%.2f", te.importTariff.defaultRateP)) }
-    var draftImpWindows by remember(te.loaded, te.importTariff) { mutableStateOf(te.importTariff.windows) }
-
-    var draftExpMode by remember(te.loaded, te.exportTariff) { mutableStateOf(te.exportTariff.mode) }
-    var draftExpPresetId by remember(te.loaded, te.exportTariff) { mutableStateOf(te.exportTariff.presetId) }
-    var draftExpLabel by remember(te.loaded, te.exportTariff) { mutableStateOf(te.exportTariff.label) }
-    var draftExpDescription by remember(te.loaded, te.exportTariff) { mutableStateOf(te.exportTariff.description) }
-    var draftExpOctopusCode by remember(te.loaded, te.exportTariff) { mutableStateOf(te.exportTariff.octopusProductCode) }
-    var draftExpRateP by remember(te.loaded, te.exportTariff) { mutableStateOf(String.format(Locale.US, "%.2f", te.exportTariff.defaultRateP)) }
-    var draftExpWindows by remember(te.loaded, te.exportTariff) { mutableStateOf(te.exportTariff.windows) }
-
-    var checkDays by remember { mutableIntStateOf(30) }
-    val todayIso = remember { SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Calendar.getInstance().time) }
-    var effectiveDateInput by remember { mutableStateOf(todayIso) }
-
-    fun buildDraftImport(): TariffSideConfigModel = TariffSideConfigModel(
-        mode = draftImpMode,
-        presetId = if (draftImpMode == "preset") draftImpPresetId else "",
-        label = if (draftImpMode == "custom") draftImpDescription.ifBlank { draftImpLabel.ifBlank { "Custom Tariff" } } else draftImpLabel.ifBlank { "Import Tariff" },
-        description = draftImpDescription.trim(),
-        octopusProductCode = if (draftImpMode == "octopus_api") draftImpOctopusCode else "",
-        defaultRateP = draftImpRateP.toDoubleOrNull() ?: 24.5,
-        windows = if (draftImpMode == "octopus_api") emptyList() else draftImpWindows,
-    )
-
-    fun buildDraftExport(): TariffSideConfigModel = TariffSideConfigModel(
-        mode = draftExpMode,
-        presetId = if (draftExpMode == "preset") draftExpPresetId else "",
-        label = if (draftExpMode == "custom") draftExpDescription.ifBlank { draftExpLabel.ifBlank { "Custom Export" } } else draftExpLabel.ifBlank { "Export Tariff" },
-        description = draftExpDescription.trim(),
-        octopusProductCode = if (draftExpMode == "octopus_api") draftExpOctopusCode else "",
-        defaultRateP = draftExpRateP.toDoubleOrNull() ?: 15.0,
-        windows = if (draftExpMode == "octopus_api") emptyList() else draftExpWindows,
-    )
 
     LazyColumn(
         modifier = Modifier
@@ -1307,17 +1311,17 @@ fun CostsScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     PowerTile(
-                        title = "Today Net",
+                        title = "Net Cost",
                         value = "$netPrefix$sym${String.format("%.2f", kotlin.math.abs(cs.todayNetCostGbp))}",
                         sub = "Standing: $sym${String.format("%.2f", cs.todayStandingChargeGbp)}",
                         accent = AccentGridExport,
                         modifier = Modifier.weight(1f),
                     )
                     PowerTile(
-                        title = "Self-Use Saved",
-                        value = "$sym${String.format("%.2f", cs.todaySavingsGbp)}",
-                        sub = "30d: $sym${String.format("%.2f", cs.thirtyDaySavingsGbp)}",
-                        accent = AccentSolar,
+                        title = "EV Cost",
+                        value = "$sym${String.format("%.2f", cs.todayEvCostGbp)}",
+                        sub = "${String.format("%.2f", cs.todayEvKwh)} kWh",
+                        accent = AccentPrimary,
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -1327,285 +1331,39 @@ fun CostsScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     PowerTile(
-                        title = "Import Outgoing",
+                        title = "Home Cost",
+                        value = "$sym${String.format("%.2f", cs.todayHouseCostGbp)}",
+                        sub = "Excl. standing & EV",
+                        accent = AccentGridImport,
+                        modifier = Modifier.weight(1f),
+                    )
+                    PowerTile(
+                        title = "Import Cost",
                         value = "$sym${String.format("%.2f", cs.todayImportCostGbp)}",
                         sub = "Now: ${String.format("%.1f", cs.importRateP)}$sub/kWh",
                         accent = AccentGridImport,
                         modifier = Modifier.weight(1f),
                     )
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     PowerTile(
-                        title = "Export Income",
+                        title = "Export Earnings",
                         value = "$sym${String.format("%.2f", cs.todayExportIncomeGbp)}",
                         sub = "Now: ${String.format("%.1f", cs.exportRateP)}$sub/kWh",
                         accent = AccentBat,
                         modifier = Modifier.weight(1f),
                     )
-                }
-            }
-        }
-
-        item {
-            SectionCard(title = "⚡ Active UK Tariff Plan (Region ${cs.region})") {
-                StatRow("Import Plan", cs.importLabel, AccentGridImport)
-                StatRow("Export Plan", cs.exportLabel, AccentBat)
-                StatRow("Standing Charge", "${String.format("%.2f", cs.standingChargeP)}$sub/day")
-                StatRow(
-                    "30-Day Net / Export",
-                    "$sym${String.format("%.2f", cs.thirtyDayNetCostGbp)} net  •  $sym${String.format("%.2f", cs.thirtyDayExportIncomeGbp)} earned",
-                )
-                Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    OutlinedButton(onClick = onRefreshCosts, modifier = Modifier.weight(1f)) {
-                        Text("⟳ Refresh")
-                    }
-                    Button(
-                        onClick = { showEditor = !showEditor },
+                    PowerTile(
+                        title = "Self-Use Savings",
+                        value = "$sym${String.format("%.2f", cs.todaySavingsGbp)}",
+                        sub = "30d: $sym${String.format("%.2f", cs.thirtyDaySavingsGbp)}",
+                        accent = AccentSolar,
                         modifier = Modifier.weight(1f),
-                    ) {
-                        Text(if (showEditor) "Hide Editor" else "Edit / Check Tariff")
-                    }
-                }
-            }
-        }
-
-        if (showEditor) {
-            item {
-                SectionCard(title = "🔧 Tariff & Supplier Setup") {
-                    OutlinedTextField(
-                        value = draftStandingP,
-                        onValueChange = { draftStandingP = it },
-                        label = { Text("Standing Charge ($sub/day)") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
                     )
-                    Spacer(Modifier.height(10.dp))
-
-                    Text("⬇ Import Tariff", color = AccentGridImport, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                    Spacer(Modifier.height(4.dp))
-                    TariffSideEditor(
-                        sideLabel = "Import",
-                        mode = draftImpMode,
-                        presetId = draftImpPresetId,
-                        description = draftImpDescription,
-                        octopusCode = draftImpOctopusCode,
-                        rateP = draftImpRateP,
-                        windows = draftImpWindows,
-                        presets = te.importPresets,
-                        octopusProducts = te.octopusImportProducts,
-                        subUnit = sub,
-                        onModeChange = { draftImpMode = it },
-                        onPresetSelect = { p ->
-                            draftImpPresetId = p.id
-                            draftImpLabel = p.name
-                            draftImpRateP = String.format(Locale.US, "%.2f", p.defaultRateP)
-                            draftStandingP = String.format(Locale.US, "%.2f", p.standingChargeP)
-                            draftImpWindows = p.windows
-                        },
-                        onOctopusSelect = { op ->
-                            draftImpOctopusCode = op.code
-                            draftImpLabel = op.displayName
-                        },
-                        onRateChange = { draftImpRateP = it },
-                        onDescriptionChange = { draftImpDescription = it },
-                        onWindowsChange = { draftImpWindows = it },
-                    )
-
-                    Spacer(Modifier.height(12.dp))
-                    HorizontalDivider(color = BorderCard)
-                    Spacer(Modifier.height(10.dp))
-
-                    Text("⬆ Export Tariff", color = AccentBat, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                    Spacer(Modifier.height(4.dp))
-                    TariffSideEditor(
-                        sideLabel = "Export",
-                        mode = draftExpMode,
-                        presetId = draftExpPresetId,
-                        description = draftExpDescription,
-                        octopusCode = draftExpOctopusCode,
-                        rateP = draftExpRateP,
-                        windows = draftExpWindows,
-                        presets = te.exportPresets,
-                        octopusProducts = te.octopusExportProducts,
-                        subUnit = sub,
-                        onModeChange = { draftExpMode = it },
-                        onPresetSelect = { p ->
-                            draftExpPresetId = p.id
-                            draftExpLabel = p.name
-                            draftExpRateP = String.format(Locale.US, "%.2f", p.defaultRateP)
-                            draftExpWindows = p.windows
-                        },
-                        onOctopusSelect = { op ->
-                            draftExpOctopusCode = op.code
-                            draftExpLabel = op.displayName
-                        },
-                        onRateChange = { draftExpRateP = it },
-                        onDescriptionChange = { draftExpDescription = it },
-                        onWindowsChange = { draftExpWindows = it },
-                    )
-
-                    Spacer(Modifier.height(12.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        OutlinedButton(
-                            onClick = {
-                                onCheckTariff(
-                                    draftRegion,
-                                    draftPostcode,
-                                    draftStandingP.toDoubleOrNull() ?: 60.0,
-                                    buildDraftImport(),
-                                    buildDraftExport(),
-                                    checkDays,
-                                )
-                            },
-                            enabled = !te.checkInProgress && !te.savingInProgress,
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text(if (te.checkInProgress) "Checking…" else "🔍 Check Tariff")
-                        }
-                        Button(
-                            onClick = {
-                                effectiveDateInput = todayIso
-                                showSaveDateDialog = true
-                            },
-                            enabled = !te.checkInProgress && !te.savingInProgress,
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text("💾 Save New Tariff")
-                        }
-                    }
-
-                    te.checkResult?.let { chk ->
-                        Spacer(Modifier.height(10.dp))
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFF0C1A2E)),
-                            border = BorderStroke(1.dp, AccentPrimary.copy(alpha = 0.6f)),
-                            shape = RoundedCornerShape(10.dp),
-                        ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text(
-                                        "🔍 Tariff Check Preview (Not Saved)",
-                                        color = AccentPrimary,
-                                        fontWeight = FontWeight.SemiBold,
-                                        fontSize = 12.5.sp,
-                                    )
-                                    TextButton(onClick = onDismissCheckPreview) {
-                                        Text("Dismiss", fontSize = 11.sp)
-                                    }
-                                }
-                                if (chk.error != null) {
-                                    Text(chk.error, color = AccentGridImport, fontSize = 12.sp)
-                                } else {
-                                    val cSym = chk.currencySymbol
-                                    val cNetPrefix = if (chk.candidateNetCostGbp < 0) "-" else ""
-                                    val bNetPrefix = if (chk.baselineNetCostGbp < 0) "-" else ""
-                                    Text(
-                                        "Import: $cSym${String.format("%.2f", chk.candidateImportCostGbp)}  •  Export: $cSym${String.format("%.2f", chk.candidateExportIncomeGbp)}  •  Standing: $cSym${String.format("%.2f", chk.candidateStandingChargeGbp)}",
-                                        color = TextMain,
-                                        fontSize = 11.5.sp,
-                                    )
-                                    Text(
-                                        "Net (${chk.daysCount}d): $cNetPrefix$cSym${String.format("%.2f", abs(chk.candidateNetCostGbp))}  •  Avg: $cSym${String.format("%.2f", abs(chk.candidateAvgDailyNetGbp))}/d",
-                                        color = TextMain,
-                                        fontSize = 11.5.sp,
-                                        fontWeight = FontWeight.Medium,
-                                    )
-                                    val diffColor = when {
-                                        chk.diffGbp < 0 -> AccentBat
-                                        chk.diffGbp > 0 -> AccentGridImport
-                                        else -> TextMuted
-                                    }
-                                    val diffText = when {
-                                        chk.diffGbp < 0 -> "Saves $cSym${String.format("%.2f", abs(chk.diffGbp))} over ${chk.daysCount}d (est. $cSym${String.format("%.2f", abs(chk.annualEstDiffGbp))}/yr)"
-                                        chk.diffGbp > 0 -> "Costs +$cSym${String.format("%.2f", chk.diffGbp)} more over ${chk.daysCount}d (est. +$cSym${String.format("%.2f", chk.annualEstDiffGbp)}/yr)"
-                                        else -> "Same net cost as current applied ($bNetPrefix$cSym${String.format("%.2f", abs(chk.baselineNetCostGbp))})"
-                                    }
-                                    Spacer(Modifier.height(4.dp))
-                                    Text(diffText, color = diffColor, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
-                                }
-                            }
-                        }
-                    }
-
-                    Spacer(Modifier.height(6.dp))
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        TextButton(onClick = onOpenTariffWebSetup) {
-                            Text("Open Full Web Setup ↗", fontSize = 11.5.sp, color = TextMuted)
-                        }
-                    }
-                }
-            }
-        }
-
-        item {
-            SectionCard(title = "📅 Applied Tariffs & Change History") {
-                val history = te.tariffHistory
-                if (history.isEmpty()) {
-                    Text(
-                        "Initial / Default Tariff applied to all dates. Use 'Save New Tariff' above to record a tariff change from a specific date.",
-                        color = TextMuted,
-                        fontSize = 11.5.sp,
-                    )
-                } else {
-                    val ordered = history.sortedBy { it.effectiveFrom }
-                    val originalId = ordered.first().id
-                    var activeId = ordered.first().id
-                    for (item in ordered) {
-                        if (item.effectiveFrom <= todayIso) activeId = item.id
-                    }
-                    ordered.reversed().forEachIndexed { idx, entry ->
-                        if (idx > 0) HorizontalDivider(color = BorderCard, modifier = Modifier.padding(vertical = 8.dp))
-                        val effLabel = if (entry.effectiveFrom <= "1970-01-01") "Initial (Baseline)" else "From ${entry.effectiveFrom}"
-                        val statusBadge = when {
-                            entry.id == activeId -> "Active" to AccentBat
-                            entry.effectiveFrom > todayIso -> "Scheduled" to AccentSolar
-                            else -> "Historical" to TextMuted
-                        }
-                        val impDisplay = entry.importTariff.description.ifBlank { entry.importTariff.label }
-                        val expDisplay = entry.exportTariff.description.ifBlank { entry.exportTariff.label }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(effLabel, color = TextMain, fontWeight = FontWeight.SemiBold, fontSize = 12.5.sp)
-                                Text(
-                                    statusBadge.first,
-                                    color = statusBadge.second,
-                                    fontSize = 10.5.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                )
-                            }
-                            if (entry.id != originalId) {
-                                TextButton(
-                                    onClick = { pendingDeleteEntry = entry },
-                                    colors = ButtonDefaults.textButtonColors(contentColor = AccentGridImport),
-                                ) {
-                                    Text("🗑 Remove", fontSize = 11.5.sp)
-                                }
-                            } else {
-                                Text("Original", color = TextMuted, fontSize = 11.sp)
-                            }
-                        }
-                        Text(
-                            "⬇ $impDisplay (${String.format("%.2f", entry.importTariff.defaultRateP)}$sub)  •  ⬆ $expDisplay (${String.format("%.2f", entry.exportTariff.defaultRateP)}$sub)",
-                            color = TextMuted,
-                            fontSize = 11.sp,
-                        )
-                        Text(
-                            "Standing: ${String.format("%.2f", entry.standingChargeP)}$sub/day",
-                            color = TextMuted,
-                            fontSize = 11.sp,
-                        )
-                    }
                 }
             }
         }
@@ -1684,6 +1442,8 @@ fun CostsScreen(
                 if (cs.dailyCosts.isEmpty()) {
                     Text("No cost data yet.", color = TextMuted, fontSize = 13.sp)
                 } else {
+                    CostLedgerBarChart(records = cs.dailyCosts, sym = sym)
+                    Spacer(Modifier.height(10.dp))
                     val runningTotals = DoubleArray(cs.dailyCosts.size)
                     var cum = 0.0
                     for (i in cs.dailyCosts.indices.reversed()) {
@@ -1708,6 +1468,11 @@ fun CostsScreen(
                                     color = TextMuted,
                                     fontSize = 11.sp,
                                 )
+                                Text(
+                                    "EV ${String.format("%.1f", d.evKwh)}kWh (${sym}${String.format("%.2f", d.evCostGbp)})  •  House ${sym}${String.format("%.2f", d.houseCostGbp)}",
+                                    color = AccentPrimary,
+                                    fontSize = 11.sp,
+                                )
                             }
                             Column(horizontalAlignment = Alignment.End) {
                                 Text(
@@ -1728,285 +1493,158 @@ fun CostsScreen(
             }
         }
 
+        item {
+            SectionCard(title = "⚡ Active UK Tariff Plan (Region ${cs.region})") {
+                StatRow("Import Plan", cs.importLabel, AccentGridImport)
+                StatRow("Export Plan", cs.exportLabel, AccentBat)
+                StatRow("Standing Charge", "${String.format("%.2f", cs.standingChargeP)}$sub/day")
+                StatRow(
+                    "30-Day Net / Export",
+                    "$sym${String.format("%.2f", cs.thirtyDayNetCostGbp)} net  •  $sym${String.format("%.2f", cs.thirtyDayExportIncomeGbp)} earned",
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(onClick = onRefreshCosts, modifier = Modifier.fillMaxWidth()) {
+                    Text("⟳ Refresh")
+                }
+            }
+        }
+
         item { Spacer(Modifier.height(8.dp)) }
     }
 
-    if (showSaveDateDialog) {
-        AlertDialog(
-            onDismissRequest = { showSaveDateDialog = false },
-            containerColor = BgCard,
-            title = { Text("💾 Save New Tariff", color = TextMain) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        "Specify the date from which this tariff should be applied. Costs before this date will keep their recorded tariff(s).",
-                        color = TextMuted,
-                        fontSize = 12.sp,
+}
+
+@Composable
+private fun CostLedgerBarChart(
+    records: List<DailyCostRecord>,
+    sym: String,
+) {
+    val ordered = remember(records) { records.reversed() }
+    var selectedIdx by remember(ordered) { mutableStateOf<Int?>(null) }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            LegendDot(color = AccentSolar, label = "Total (inc SC)")
+            LegendDot(color = AccentGridImport, label = "Home (excl. SC)")
+            LegendDot(color = AccentPrimary, label = "EV Cost")
+        }
+
+        selectedIdx?.let { idx ->
+            ordered.getOrNull(idx)?.let { d ->
+                val netPrefix = if (d.netCostGbp < 0) "-" else ""
+                Text(
+                    "${d.date}: Total $netPrefix$sym${String.format("%.2f", abs(d.netCostGbp))}  •  Home $sym${String.format("%.2f", d.houseCostGbp)}  •  EV $sym${String.format("%.2f", d.evCostGbp)}",
+                    color = TextMain,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+            }
+        }
+
+        Canvas(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(170.dp)
+                .pointerInput(ordered) {
+                    detectTapGestures { pos ->
+                        if (ordered.isNotEmpty() && size.width > 0) {
+                            val idx = ((pos.x / size.width) * ordered.size).toInt().coerceIn(0, ordered.lastIndex)
+                            selectedIdx = if (selectedIdx == idx) null else idx
+                        }
+                    }
+                },
+        ) {
+            if (ordered.isEmpty()) return@Canvas
+            val w = size.width
+            val h = size.height
+            val padT = 8f
+            val padB = 8f
+            val ch = (h - padT - padB).coerceAtLeast(10f)
+
+            var minVal = 0.0
+            var maxVal = 1.0
+            ordered.forEach { d ->
+                minVal = minOf(minVal, d.netCostGbp, d.houseCostGbp, d.evCostGbp)
+                maxVal = maxOf(maxVal, d.netCostGbp, d.houseCostGbp, d.evCostGbp)
+            }
+            val range = (maxVal - minVal).coerceAtLeast(0.5)
+            fun yOf(v: Double): Float = padT + ch - (((v - minVal) / range).toFloat() * ch)
+            val yZero = yOf(0.0)
+
+            // Horizontal grid lines
+            for (i in 0..4) {
+                val y = padT + (ch * i) / 4f
+                drawLine(
+                    color = Color(0xFF334155).copy(alpha = 0.35f),
+                    start = Offset(0f, y),
+                    end = Offset(w, y),
+                    strokeWidth = 1f,
+                )
+            }
+
+            if (minVal < 0.0) {
+                drawLine(
+                    color = Color(0xFF94A3B8).copy(alpha = 0.6f),
+                    start = Offset(0f, yZero),
+                    end = Offset(w, yZero),
+                    strokeWidth = 1.5f,
+                )
+            }
+
+            val groupW = w / ordered.size
+            val innerPad = (groupW * 0.12f).coerceAtLeast(1f)
+            val barW = ((groupW - innerPad * 2f) / 3f - 1f).coerceAtLeast(2f)
+
+            ordered.forEachIndexed { idx, d ->
+                val x0 = idx * groupW + innerPad
+                if (selectedIdx == idx) {
+                    drawRect(
+                        color = Color.White.copy(alpha = 0.07f),
+                        topLeft = Offset(idx * groupW, 0f),
+                        size = androidx.compose.ui.geometry.Size(groupW, h),
                     )
-                    OutlinedTextField(
-                        value = effectiveDateInput,
-                        onValueChange = { effectiveDateInput = it },
-                        label = { Text("Apply From Date (YYYY-MM-DD)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedButton(
-                        onClick = {
-                            val cal = Calendar.getInstance()
-                            runCatching {
-                                val parts = effectiveDateInput.split("-")
-                                if (parts.size == 3) {
-                                    cal.set(parts[0].toInt(), parts[1].toInt() - 1, parts[2].toInt())
-                                }
-                            }
-                            android.app.DatePickerDialog(
-                                context,
-                                { _, y, m, d ->
-                                    effectiveDateInput = String.format(Locale.US, "%04d-%02d-%02d", y, m + 1, d)
-                                },
-                                cal.get(Calendar.YEAR),
-                                cal.get(Calendar.MONTH),
-                                cal.get(Calendar.DAY_OF_MONTH),
-                            ).show()
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("📅 Pick Date")
+                }
+
+                fun drawBar(valGbp: Double, x: Float, color: Color) {
+                    val yV = yOf(valGbp)
+                    val top = minOf(yV, yZero)
+                    val bh = abs(yV - yZero).let { if (valGbp == 0.0) 0f else it.coerceAtLeast(2f) }
+                    if (bh > 0f) {
+                        drawRect(
+                            color = color,
+                            topLeft = Offset(x, top),
+                            size = androidx.compose.ui.geometry.Size(barW, bh),
+                        )
                     }
                 }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        showSaveDateDialog = false
-                        onSaveNewTariff(
-                            draftRegion,
-                            draftPostcode,
-                            draftStandingP.toDoubleOrNull() ?: 60.0,
-                            buildDraftImport(),
-                            buildDraftExport(),
-                            effectiveDateInput.trim(),
-                        )
-                    },
-                ) {
-                    Text("Confirm & Save")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showSaveDateDialog = false }) {
-                    Text("Cancel")
-                }
-            },
-        )
-    }
 
-    pendingDeleteEntry?.let { entry ->
-        AlertDialog(
-            onDismissRequest = { pendingDeleteEntry = null },
-            containerColor = BgCard,
-            title = { Text("Remove Applied Tariff?", color = TextMain) },
-            text = {
-                val eff = if (entry.effectiveFrom <= "1970-01-01") "Initial (Baseline)" else entry.effectiveFrom
-                Text(
-                    "Remove tariff effective from $eff (${entry.importTariff.label} / ${entry.exportTariff.label})? Cost calculations will immediately recalculate.",
-                    color = TextMuted,
-                    fontSize = 12.5.sp,
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        val id = entry.id
-                        pendingDeleteEntry = null
-                        onRemoveTariffHistory(id)
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = AccentGridImport),
-                ) {
-                    Text("Remove")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingDeleteEntry = null }) {
-                    Text("Cancel")
-                }
-            },
-        )
+                drawBar(d.netCostGbp, x0, AccentSolar)
+                drawBar(d.houseCostGbp, x0 + barW + 1f, AccentGridImport)
+                drawBar(d.evCostGbp, x0 + (barW + 1f) * 2f, AccentPrimary)
+            }
+        }
+
+        if (ordered.isNotEmpty()) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(ordered.first().date, color = TextMuted, fontSize = 10.sp)
+                Text(ordered.last().date, color = TextMuted, fontSize = 10.sp)
+            }
+        }
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun TariffSideEditor(
-    sideLabel: String,
-    mode: String,
-    presetId: String,
-    description: String,
-    octopusCode: String,
-    rateP: String,
-    windows: List<TariffWindowModel>,
-    presets: List<TariffPresetModel>,
-    octopusProducts: List<OctopusProductModel>,
-    subUnit: String,
-    onModeChange: (String) -> Unit,
-    onPresetSelect: (TariffPresetModel) -> Unit,
-    onOctopusSelect: (OctopusProductModel) -> Unit,
-    onRateChange: (String) -> Unit,
-    onDescriptionChange: (String) -> Unit,
-    onWindowsChange: (List<TariffWindowModel>) -> Unit,
-) {
-    var presetMenuOpen by remember { mutableStateOf(false) }
-    var octMenuOpen by remember { mutableStateOf(false) }
-
-    val modes = listOf("preset" to "Preset", "octopus_api" to "Octopus API", "custom" to "Custom")
-    FlowRow(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        modes.forEach { (mKey, mLbl) ->
-            val active = mode == mKey
-            FilterChip(
-                selected = active,
-                onClick = { onModeChange(mKey) },
-                label = { Text(mLbl, fontSize = 11.sp, color = if (active) Color.White else TextMuted) },
-                colors = FilterChipDefaults.filterChipColors(
-                    containerColor = Color(0xFF0F172A),
-                    selectedContainerColor = AccentPrimary,
-                ),
-            )
-        }
-    }
-
-    if (mode == "preset" && presets.isNotEmpty()) {
-        val currentPreset = presets.find { it.id == presetId }
-        Box(modifier = Modifier.fillMaxWidth()) {
-            OutlinedButton(onClick = { presetMenuOpen = true }, modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    currentPreset?.let { "${it.supplier} — ${it.name}" } ?: "Select $sideLabel Preset ▾",
-                    maxLines = 1,
-                    fontSize = 12.sp,
-                )
-            }
-            DropdownMenu(expanded = presetMenuOpen, onDismissRequest = { presetMenuOpen = false }) {
-                presets.forEach { p ->
-                    DropdownMenuItem(
-                        text = { Text("${p.supplier} — ${p.name}", fontSize = 12.5.sp) },
-                        onClick = {
-                            presetMenuOpen = false
-                            onPresetSelect(p)
-                        },
-                    )
-                }
-            }
-        }
-        Spacer(Modifier.height(6.dp))
-    } else if (mode == "octopus_api") {
-        val currentOct = octopusProducts.find { it.code == octopusCode }
-        Box(modifier = Modifier.fillMaxWidth()) {
-            OutlinedButton(onClick = { octMenuOpen = true }, modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    currentOct?.displayName ?: (if (octopusCode.isNotBlank()) octopusCode else "Select Octopus Product ▾"),
-                    maxLines = 1,
-                    fontSize = 12.sp,
-                )
-            }
-            DropdownMenu(expanded = octMenuOpen, onDismissRequest = { octMenuOpen = false }) {
-                octopusProducts.forEach { op ->
-                    DropdownMenuItem(
-                        text = { Text(op.displayName, fontSize = 12.5.sp) },
-                        onClick = {
-                            octMenuOpen = false
-                            onOctopusSelect(op)
-                        },
-                    )
-                }
-            }
-        }
-        Spacer(Modifier.height(6.dp))
-    }
-
-    OutlinedTextField(
-        value = description,
-        onValueChange = onDescriptionChange,
-        label = { Text("$sideLabel Description") },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-    )
-    Spacer(Modifier.height(6.dp))
-
-    OutlinedTextField(
-        value = rateP,
-        onValueChange = onRateChange,
-        label = { Text("Default / Day Rate ($subUnit/kWh)") },
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-    )
-
-    if (mode != "octopus_api") {
-        Spacer(Modifier.height(6.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("Time-of-Use Windows (${windows.size})", color = TextMuted, fontSize = 11.5.sp)
-            TextButton(onClick = {
-                onWindowsChange(windows + TariffWindowModel("00:00", "07:00", 7.0, "Off-Peak"))
-            }) {
-                Text("+ Add Window", fontSize = 11.5.sp)
-            }
-        }
-        windows.forEachIndexed { idx, w ->
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                OutlinedTextField(
-                    value = w.start,
-                    onValueChange = { nv ->
-                        val copy = windows.toMutableList()
-                        copy[idx] = w.copy(start = nv)
-                        onWindowsChange(copy)
-                    },
-                    label = { Text("Start") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f),
-                )
-                OutlinedTextField(
-                    value = w.end,
-                    onValueChange = { nv ->
-                        val copy = windows.toMutableList()
-                        copy[idx] = w.copy(end = nv)
-                        onWindowsChange(copy)
-                    },
-                    label = { Text("End") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f),
-                )
-                OutlinedTextField(
-                    value = String.format(Locale.US, "%.2f", w.rateP),
-                    onValueChange = { nv ->
-                        val parsed = nv.toDoubleOrNull()
-                        if (parsed != null) {
-                            val copy = windows.toMutableList()
-                            copy[idx] = w.copy(rateP = parsed)
-                            onWindowsChange(copy)
-                        }
-                    },
-                    label = { Text(subUnit) },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    singleLine = true,
-                    modifier = Modifier.weight(0.9f),
-                )
-                TextButton(onClick = {
-                    val copy = windows.toMutableList()
-                    copy.removeAt(idx)
-                    onWindowsChange(copy)
-                }) {
-                    Text("✕", color = AccentGridImport)
-                }
-            }
-        }
+private fun LegendDot(color: Color, label: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        Box(modifier = Modifier.size(8.dp).background(color, CircleShape))
+        Text(label, color = TextMuted, fontSize = 10.5.sp)
     }
 }

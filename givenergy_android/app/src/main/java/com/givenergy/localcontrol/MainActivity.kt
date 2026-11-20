@@ -263,8 +263,9 @@ class MainActivity : ComponentActivity() {
                         5 -> EvChargerScreen(uiState, sendControlAction)
                         2 -> HistoryScreen(
                             state = uiState,
-                            onSelectRange = { days -> loadHistoryAsync(days) },
-                            onReloadHistory = { loadHistoryAsync(uiState.historyRangeDays) },
+                            onSelectRange = { days -> loadHistoryAsync(days, uiState.historyEndDate) },
+                            onSelectEndDate = { endDate -> loadHistoryAsync(uiState.historyRangeDays, endDate) },
+                            onReloadHistory = { loadHistoryAsync(uiState.historyRangeDays, uiState.historyEndDate) },
                         )
                         6 -> SolarForecastScreen(
                             state = uiState,
@@ -318,91 +319,6 @@ class MainActivity : ComponentActivity() {
                                 if (base.isNotBlank()) {
                                     startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("$base/?tab=costs")))
                                 }
-                            },
-                            onCheckTariff = { region, postcode, scP, imp, exp, days ->
-                                uiState = uiState.copy(
-                                    tariffEditor = uiState.tariffEditor.copy(checkInProgress = true),
-                                )
-                                thread {
-                                    val payload = org.json.JSONObject().apply {
-                                        put("currency_symbol", uiState.tariffEditor.currencySymbol)
-                                        put("sub_unit_symbol", uiState.tariffEditor.subUnitSymbol)
-                                        put("region", region)
-                                        put("postcode", postcode)
-                                        put("standing_charge_p", scP)
-                                        put("import_tariff", imp.toJson())
-                                        put("export_tariff", exp.toJson())
-                                        put("days", days)
-                                    }
-                                    val res = runCatching { apiClient.checkTariff(payload) }.getOrNull()
-                                    val parsed = if (res != null) {
-                                        PlantJsonParser.parseTariffCheckResult(res)
-                                    } else {
-                                        TariffCheckResult(error = "Failed to reach server")
-                                    }
-                                    runOnUiThread {
-                                        uiState = uiState.copy(
-                                            tariffEditor = uiState.tariffEditor.copy(
-                                                checkInProgress = false,
-                                                checkResult = parsed,
-                                            ),
-                                        )
-                                    }
-                                }
-                            },
-                            onSaveNewTariff = { region, postcode, scP, imp, exp, effectiveFrom ->
-                                uiState = uiState.copy(
-                                    tariffEditor = uiState.tariffEditor.copy(savingInProgress = true),
-                                )
-                                thread {
-                                    val payload = org.json.JSONObject().apply {
-                                        put("currency_symbol", uiState.tariffEditor.currencySymbol)
-                                        put("sub_unit_symbol", uiState.tariffEditor.subUnitSymbol)
-                                        put("region", region)
-                                        put("postcode", postcode)
-                                        put("standing_charge_p", scP)
-                                        put("import_tariff", imp.toJson())
-                                        put("export_tariff", exp.toJson())
-                                        put("effective_from", effectiveFrom)
-                                    }
-                                    val res = runCatching { apiClient.saveTariffConfig(payload) }.getOrNull()
-                                    val ok = res?.optBoolean("ok", false) == true
-                                    runOnUiThread {
-                                        uiState = uiState.copy(
-                                            tariffEditor = uiState.tariffEditor.copy(
-                                                savingInProgress = false,
-                                                checkResult = if (ok) null else uiState.tariffEditor.checkResult,
-                                            ),
-                                        )
-                                        scope.launch {
-                                            snackbarHostState.showSnackbar(
-                                                if (ok) "New tariff saved (from $effectiveFrom)"
-                                                else (res?.optString("error") ?: "Failed to save tariff")
-                                            )
-                                        }
-                                        if (ok) loadCostsAsync(uiState.costSummary.selectedPeriod)
-                                    }
-                                }
-                            },
-                            onRemoveTariffHistory = { entryId ->
-                                thread {
-                                    val res = runCatching { apiClient.deleteTariffHistory(entryId) }.getOrNull()
-                                    val ok = res?.optBoolean("ok", false) == true
-                                    runOnUiThread {
-                                        scope.launch {
-                                            snackbarHostState.showSnackbar(
-                                                if (ok) "Applied tariff removed"
-                                                else (res?.optString("error") ?: "Failed to remove tariff")
-                                            )
-                                        }
-                                        if (ok) loadCostsAsync(uiState.costSummary.selectedPeriod)
-                                    }
-                                }
-                            },
-                            onDismissCheckPreview = {
-                                uiState = uiState.copy(
-                                    tariffEditor = uiState.tariffEditor.copy(checkResult = null),
-                                )
                             },
                         )
                         3 -> SystemScreen(
@@ -602,16 +518,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun loadHistoryAsync(days: Int = uiState.historyRangeDays) {
+    private fun loadHistoryAsync(
+        days: Int = uiState.historyRangeDays,
+        endDate: String = uiState.historyEndDate,
+    ) {
+        val targetDate = endDate.ifBlank { null }
         runOnUiThread {
-            uiState = uiState.copy(historyRangeDays = days)
+            uiState = uiState.copy(historyRangeDays = days, historyEndDate = endDate)
         }
         thread {
             try {
                 val seriesJson = if (days <= 1) {
-                    apiClient.fetchIntradayHistory()
+                    apiClient.fetchIntradayHistory(targetDate)
                 } else {
-                    apiClient.fetchRangeHistory(days)
+                    apiClient.fetchRangeHistory(days, targetDate)
                 }
                 val series = if (seriesJson != null) PlantJsonParser.parseHistorySeries(seriesJson) else emptyList()
                 val hist = apiClient.fetchDailyHistory(30)

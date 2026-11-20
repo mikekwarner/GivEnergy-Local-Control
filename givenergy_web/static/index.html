@@ -404,6 +404,37 @@
       margin-top: 2px;
     }
 
+    .kpi-strip {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 12px;
+    }
+
+    .kpi-strip.compact {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 8px;
+    }
+
+    .kpi-strip.compact .kpi-card {
+      padding: 8px 10px 8px 12px;
+    }
+
+    .kpi-strip.compact .kpi-title {
+      font-size: 10px;
+      margin-bottom: 2px;
+    }
+
+    .kpi-strip.compact .kpi-val {
+      font-size: 17px;
+      margin-bottom: 1px;
+    }
+
+    .kpi-strip.compact .kpi-sub,
+    .kpi-strip.compact .kpi-sub2 {
+      font-size: 10.5px;
+    }
+
     .soc-bar-wrap {
       height: 6px;
       background: #090D16;
@@ -1057,7 +1088,7 @@
           </div>
         </div>
 
-        <div class="kpi-strip" style="margin-bottom:14px;">
+        <div class="kpi-strip compact" style="margin-bottom:14px;">
           <div class="kpi-card" style="--accent: #F59E0B;">
             <div class="kpi-title">☀ Today Adjusted Forecast</div>
             <div class="kpi-val" id="fc-kpi-today-total">—</div>
@@ -1154,11 +1185,22 @@
 
       <!-- TAB 2B: COSTS & TARIFFS -->
       <section class="tab-pane" id="tab-costs">
-        <div class="kpi-strip" style="margin-bottom:14px;">
+        <div class="kpi-strip compact" style="margin-bottom:14px;">
           <div class="kpi-card" style="--accent: #38BDF8;">
             <div class="kpi-title">📅 Today Net Cost</div>
             <div class="kpi-val" id="cost-today-net">—</div>
             <div class="kpi-sub" id="cost-today-sc">Standing: —</div>
+          </div>
+          <div class="kpi-card" style="--accent: #38BDF8;">
+            <div class="kpi-title">🚗 Today EV Cost</div>
+            <div class="kpi-val" id="cost-today-ev">—</div>
+            <div class="kpi-sub" id="cost-today-ev-kwh">— kWh</div>
+            <div class="kpi-sub2">Grid + Solar/Hybrid (exp rate)</div>
+          </div>
+          <div class="kpi-card" style="--accent: #FCA5A5;">
+            <div class="kpi-title">🏠 Today Home Cost</div>
+            <div class="kpi-val" id="cost-today-house">—</div>
+            <div class="kpi-sub">Excl. standing charge &amp; EV</div>
           </div>
           <div class="kpi-card" style="--accent: #EF4444;">
             <div class="kpi-title">⬇ Today Import Cost</div>
@@ -1179,7 +1221,69 @@
           </div>
         </div>
 
-        <div class="panel">
+        <!-- Cost & Export Ledger (Days / Weeks / Months / Years / All Time) -->
+        <div class="panel" style="margin-bottom:14px;">
+          <div class="panel-header" style="flex-wrap:wrap; gap:10px;">
+            <div>
+              <div class="panel-title" id="cost-ledger-title">Cost &amp; Export Ledger (Last 30 Days)</div>
+              <div class="panel-sub" id="cost-ledger-sub">Estimated import outgoings, export income, EV charging cost (incl. export tariff for Solar/Hybrid), household cost (excl. standing charge) &amp; savings</div>
+            </div>
+            <div id="cost-period-buttons" style="display:flex; flex-wrap:wrap; gap:6px;">
+              <button class="btn primary" data-period="days" onclick="setCostLedgerPeriod('days', this)">Days (30d)</button>
+              <button class="btn" data-period="weeks" onclick="setCostLedgerPeriod('weeks', this)">Weeks</button>
+              <button class="btn" data-period="months" onclick="setCostLedgerPeriod('months', this)">Months</button>
+              <button class="btn" data-period="years" onclick="setCostLedgerPeriod('years', this)">Years</button>
+              <button class="btn" data-period="all" onclick="setCostLedgerPeriod('all', this)">All Time</button>
+            </div>
+          </div>
+          <div id="cost-period-summary-strip" style="display:flex; flex-wrap:wrap; gap:12px; margin-bottom:10px; padding:8px 12px; background:rgba(15,23,42,0.55); border:1px solid var(--border); border-radius:8px; font-size:12px;">
+            <span>Period: <strong id="cost-sum-days">—</strong></span>
+            <span>Import: <strong id="cost-sum-imp" style="color:#F87171;">—</strong></span>
+            <span>Export: <strong id="cost-sum-exp" style="color:#34D399;">—</strong></span>
+            <span>EV: <strong id="cost-sum-ev" style="color:#38BDF8;">—</strong></span>
+            <span>House (excl. SC): <strong id="cost-sum-house" style="color:#FCA5A5;">—</strong></span>
+            <span>Standing: <strong id="cost-sum-sc">—</strong></span>
+            <span>Net: <strong id="cost-sum-net">—</strong></span>
+            <span>Avg/Day: <strong id="cost-sum-avg">—</strong></span>
+            <span>Saved: <strong id="cost-sum-sav" style="color:#FBBF24;">—</strong></span>
+            <span title="Estimated total savings vs Ofgem Price Cap (24.50p/kWh + 60p/day) for the same consumption without solar, battery, or export">vs Price Cap: <strong id="cost-sum-cap" style="color:#34D399;">—</strong></span>
+          </div>
+          <div class="legend-bar" style="margin-bottom:6px;">
+            <span class="legend-item"><span class="legend-swatch" style="background:#F59E0B"></span>Total Cost (inc SC)</span>
+            <span class="legend-item"><span class="legend-swatch" style="background:#EF4444"></span>Home Cost (excl. SC)</span>
+            <span class="legend-item"><span class="legend-swatch" style="background:#38BDF8"></span>EV Cost</span>
+          </div>
+          <div class="canvas-wrap" style="margin-bottom:12px;">
+            <canvas id="costLedgerBarCanvas" height="210"></canvas>
+            <div class="chart-tooltip" id="costLedgerTooltip"></div>
+          </div>
+          <div class="table-wrap" style="max-height:520px; overflow:auto;">
+            <table>
+              <thead>
+                <tr>
+                  <th>Period</th>
+                  <th>Import (kWh)</th>
+                  <th>Export (kWh)</th>
+                  <th>EV (kWh)</th>
+                  <th>Standing</th>
+                  <th>Imp Cost</th>
+                  <th>Exp Earn</th>
+                  <th title="Actual EV charging cost: grid import at import rate + solar/hybrid at export rate">EV Cost</th>
+                  <th title="Actual household electricity cost excluding standing charges &amp; EV charging">House Cost</th>
+                  <th>Net Cost</th>
+                  <th>Solar/Batt Saving</th>
+                  <th>Current Total</th>
+                </tr>
+              </thead>
+              <tbody id="cost-daily-tbody">
+                <tr><td colspan="12" style="text-align:center; color:var(--text-muted);">Loading cost ledger…</td></tr>
+              </tbody>
+              <tfoot id="cost-daily-tfoot"></tfoot>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel" style="margin-bottom:14px;">
           <div class="panel-header">
             <div>
               <div class="panel-title">Intraday Half-Hourly Cost &amp; Export Earnings</div>
@@ -1203,9 +1307,8 @@
           </div>
         </div>
 
-        <div class="two-col" style="margin-bottom:14px;">
           <!-- Tariff Picker & Setup -->
-          <div class="panel">
+          <div class="panel" style="margin-bottom:14px;">
             <div class="panel-header">
               <div>
                 <div class="panel-title">⚡ Tariff &amp; Supplier Setup (UK Live API + Presets)</div>
@@ -1387,55 +1490,6 @@
               </div>
             </div>
           </div>
-
-          <!-- Cost & Export Ledger (Days / Weeks / Months / Years / All Time) -->
-          <div class="panel">
-            <div class="panel-header" style="flex-wrap:wrap; gap:10px;">
-              <div>
-                <div class="panel-title" id="cost-ledger-title">Cost &amp; Export Ledger (Last 30 Days)</div>
-                <div class="panel-sub" id="cost-ledger-sub">Estimated import outgoings, export income, standing charge &amp; savings</div>
-              </div>
-              <div id="cost-period-buttons" style="display:flex; flex-wrap:wrap; gap:6px;">
-                <button class="btn primary" data-period="days" onclick="setCostLedgerPeriod('days', this)">Days (30d)</button>
-                <button class="btn" data-period="weeks" onclick="setCostLedgerPeriod('weeks', this)">Weeks</button>
-                <button class="btn" data-period="months" onclick="setCostLedgerPeriod('months', this)">Months</button>
-                <button class="btn" data-period="years" onclick="setCostLedgerPeriod('years', this)">Years</button>
-                <button class="btn" data-period="all" onclick="setCostLedgerPeriod('all', this)">All Time</button>
-              </div>
-            </div>
-            <div id="cost-period-summary-strip" style="display:flex; flex-wrap:wrap; gap:12px; margin-bottom:10px; padding:8px 12px; background:rgba(15,23,42,0.55); border:1px solid var(--border); border-radius:8px; font-size:12px;">
-              <span>Period: <strong id="cost-sum-days">—</strong></span>
-              <span>Import: <strong id="cost-sum-imp" style="color:#F87171;">—</strong></span>
-              <span>Export: <strong id="cost-sum-exp" style="color:#34D399;">—</strong></span>
-              <span>Standing: <strong id="cost-sum-sc">—</strong></span>
-              <span>Net: <strong id="cost-sum-net">—</strong></span>
-              <span>Avg/Day: <strong id="cost-sum-avg">—</strong></span>
-              <span>Saved: <strong id="cost-sum-sav" style="color:#FBBF24;">—</strong></span>
-              <span title="Estimated total savings vs Ofgem Price Cap (24.50p/kWh + 60p/day) for the same consumption without solar, battery, or export">vs Price Cap: <strong id="cost-sum-cap" style="color:#34D399;">—</strong></span>
-            </div>
-            <div class="table-wrap" style="max-height:520px; overflow:auto;">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Period</th>
-                    <th>Import (kWh)</th>
-                    <th>Export (kWh)</th>
-                    <th>Standing</th>
-                    <th>Imp Cost</th>
-                    <th>Exp Earn</th>
-                    <th>Net Cost</th>
-                    <th>Solar/Batt Saving</th>
-                    <th>Current Total</th>
-                  </tr>
-                </thead>
-                <tbody id="cost-daily-tbody">
-                  <tr><td colspan="9" style="text-align:center; color:var(--text-muted);">Loading cost ledger…</td></tr>
-                </tbody>
-                <tfoot id="cost-daily-tfoot"></tfoot>
-              </table>
-            </div>
-          </div>
-        </div>
 
         <!-- Tariff Comparison Area -->
         <div class="panel" id="panel-tariff-comparison" style="margin-top:16px;">
@@ -5235,6 +5289,145 @@
       loadCostLedgerOnly();
     }
 
+    let _lastCostLedgerData = null;
+
+    function drawCostLedgerBarChart(rows, sym) {
+      const canvas = document.getElementById('costLedgerBarCanvas');
+      const tip = document.getElementById('costLedgerTooltip');
+      if (!canvas) return;
+      const dpr = window.devicePixelRatio || 1;
+      const w = canvas.parentElement.clientWidth || 720;
+      const h = 210;
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      canvas.style.width = w + 'px';
+      canvas.style.height = h + 'px';
+      const ctx = canvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+      ctx.clearRect(0, 0, w, h);
+
+      if (!rows || !rows.length) {
+        ctx.fillStyle = '#94A3B8';
+        ctx.font = '12px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('No ledger data for this period yet.', w / 2, h / 2);
+        return;
+      }
+
+      const ordered = [...rows].reverse();
+      const pad = { l: 52, r: 16, t: 14, b: 28 };
+      const cw = w - pad.l - pad.r;
+      const ch = h - pad.t - pad.b;
+      const s = sym || '£';
+
+      let minVal = 0;
+      let maxVal = 1;
+      ordered.forEach(d => {
+        const totC = Number(d.net_cost_gbp || 0);
+        const homeC = Number(d.house_cost_gbp ?? d.import_cost_gbp ?? 0);
+        const evC = Number(d.ev_cost_gbp || 0);
+        minVal = Math.min(minVal, totC, homeC, evC);
+        maxVal = Math.max(maxVal, totC, homeC, evC);
+      });
+      const range = Math.max(0.5, maxVal - minVal);
+      const yOf = (v) => pad.t + ch - ((v - minVal) / range) * ch;
+      const yZero = yOf(0);
+
+      // Horizontal grid lines
+      ctx.strokeStyle = 'rgba(148,163,184,0.12)';
+      ctx.lineWidth = 1;
+      ctx.font = '10.5px system-ui, sans-serif';
+      ctx.fillStyle = '#94A3B8';
+      for (let i = 0; i <= 4; i++) {
+        const val = minVal + (range * (4 - i)) / 4;
+        const y = pad.t + (ch * i) / 4;
+        ctx.beginPath();
+        ctx.moveTo(pad.l, y);
+        ctx.lineTo(pad.l + cw, y);
+        ctx.stroke();
+        ctx.textAlign = 'right';
+        ctx.fillText(`${val < 0 ? '-' : ''}${s}${Math.abs(val).toFixed(2)}`, pad.l - 6, y + 4);
+      }
+
+      // Zero baseline if negative values exist
+      if (minVal < 0) {
+        ctx.strokeStyle = 'rgba(148,163,184,0.35)';
+        ctx.beginPath();
+        ctx.moveTo(pad.l, yZero);
+        ctx.lineTo(pad.l + cw, yZero);
+        ctx.stroke();
+      }
+
+      const groupW = cw / ordered.length;
+      const innerPad = Math.max(1, groupW * 0.14);
+      const barW = Math.max(2, (groupW - innerPad * 2) / 3 - 1);
+      const labelStep = Math.max(1, Math.ceil(ordered.length / 10));
+
+      ordered.forEach((d, i) => {
+        const x0 = pad.l + i * groupW + innerPad;
+        const totC = Number(d.net_cost_gbp || 0);
+        const homeC = Number(d.house_cost_gbp ?? d.import_cost_gbp ?? 0);
+        const evC = Number(d.ev_cost_gbp || 0);
+
+        const drawBar = (val, x, color) => {
+          const yV = yOf(val);
+          const top = Math.min(yV, yZero);
+          const bh = Math.max(val === 0 ? 0 : 1.5, Math.abs(yV - yZero));
+          if (bh > 0) {
+            ctx.fillStyle = color;
+            ctx.fillRect(x, top, barW, bh);
+          }
+        };
+
+        drawBar(totC, x0, '#F59E0B');
+        drawBar(homeC, x0 + barW + 1, '#EF4444');
+        drawBar(evC, x0 + (barW + 1) * 2, '#38BDF8');
+
+        if (i % labelStep === 0 || i === ordered.length - 1) {
+          const rawLbl = String(d.label || d.date_str || '');
+          const shortLbl = rawLbl.length > 10 ? rawLbl.slice(0, 10) : rawLbl.replace(/^\d{4}-/, '');
+          ctx.fillStyle = '#94A3B8';
+          ctx.textAlign = 'center';
+          ctx.fillText(shortLbl, pad.l + i * groupW + groupW / 2, h - 8);
+        }
+      });
+
+      if (!canvas.dataset.tipBound) {
+        canvas.dataset.tipBound = '1';
+        canvas.addEventListener('mousemove', (ev) => {
+          const st = _lastCostLedgerData;
+          if (!st || !st.rows || !st.rows.length || !tip) return;
+          const rect = canvas.getBoundingClientRect();
+          const mx = ev.clientX - rect.left;
+          const ord = [...st.rows].reverse();
+          const gW = (rect.width - pad.l - pad.r) / ord.length;
+          const idx = Math.floor((mx - pad.l) / gW);
+          if (idx < 0 || idx >= ord.length) {
+            tip.style.display = 'none';
+            return;
+          }
+          const d = ord[idx];
+          const symC = st.sym || '£';
+          const fmt = (v) => `${v < 0 ? '-' : ''}${symC}${Math.abs(Number(v || 0)).toFixed(2)}`;
+          const totC = Number(d.net_cost_gbp || 0);
+          const homeC = Number(d.house_cost_gbp ?? d.import_cost_gbp ?? 0);
+          const evC = Number(d.ev_cost_gbp || 0);
+          tip.innerHTML = `
+            <div style="font-weight:700; margin-bottom:3px;">${_escapeHtml(d.label || d.date_str || '')}</div>
+            <div style="color:#F59E0B;">Total (inc SC): ${fmt(totC)}</div>
+            <div style="color:#FCA5A5;">Home (excl. SC): ${fmt(homeC)}</div>
+            <div style="color:#38BDF8;">EV Cost: ${fmt(evC)} (${Number(d.ev_kwh || 0).toFixed(2)} kWh)</div>
+          `;
+          tip.style.display = 'block';
+          tip.style.left = Math.min(rect.width - 170, Math.max(8, mx + 12)) + 'px';
+          tip.style.top = '10px';
+        });
+        canvas.addEventListener('mouseleave', () => {
+          if (tip) tip.style.display = 'none';
+        });
+      }
+    }
+
     function _renderCostLedger(s) {
       const sym = s.currency_symbol || '£';
       const dObj = s.daily || {};
@@ -5258,6 +5451,10 @@
       document.getElementById('cost-sum-days').textContent = `${nDays} day${nDays === 1 ? '' : 's'}`;
       document.getElementById('cost-sum-imp').textContent = `${Number(tot.import_kwh || 0).toFixed(1)} kWh (${sym}${Number(tot.import_cost_gbp || 0).toFixed(2)})`;
       document.getElementById('cost-sum-exp').textContent = `${Number(tot.export_kwh || 0).toFixed(1)} kWh (${sym}${Number(tot.export_income_gbp || 0).toFixed(2)})`;
+      const evSumEl = document.getElementById('cost-sum-ev');
+      if (evSumEl) evSumEl.textContent = `${Number(tot.ev_kwh || 0).toFixed(1)} kWh (${sym}${Number(tot.ev_cost_gbp || 0).toFixed(2)})`;
+      const houseSumEl = document.getElementById('cost-sum-house');
+      if (houseSumEl) houseSumEl.textContent = `${sym}${Number(tot.house_cost_gbp ?? tot.import_cost_gbp ?? 0).toFixed(2)}`;
       document.getElementById('cost-sum-sc').textContent = `${sym}${Number(tot.standing_charge_gbp || 0).toFixed(2)}`;
       document.getElementById('cost-sum-net').textContent = fmtMoney(netVal);
       document.getElementById('cost-sum-avg').textContent = `${fmtMoney(avgVal)}/d`;
@@ -5272,8 +5469,10 @@
 
       const tbody = document.getElementById('cost-daily-tbody');
       const tfoot = document.getElementById('cost-daily-tfoot');
+      _lastCostLedgerData = { rows, sym };
+      drawCostLedgerBarChart(rows, sym);
       if (!rows.length) {
-        tbody.innerHTML = '<tr><td colspan="9" style="text-align:center; color:var(--text-muted);">No history recorded yet.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="12" style="text-align:center; color:var(--text-muted);">No history recorded yet.</td></tr>';
         if (tfoot) tfoot.innerHTML = '';
       } else {
         // Compute cumulative running Net Cost from oldest row up to each row
@@ -5289,14 +5488,20 @@
           const periodLabel = dc > 1 && _costLedgerPeriod !== 'all' ? `${baseLabel} (${dc}d)` : baseLabel;
           const rNet = Number(d.net_cost_gbp || 0);
           const rCum = runningTotals[idx];
+          const evKwh = Number(d.ev_kwh || 0);
+          const evCost = Number(d.ev_cost_gbp || 0);
+          const houseCost = Number(d.house_cost_gbp ?? d.import_cost_gbp ?? 0);
           return `
             <tr>
               <td style="font-weight:500;">${periodLabel}</td>
               <td>${Number(d.import_kwh).toFixed(2)}</td>
               <td>${Number(d.export_kwh).toFixed(2)}</td>
+              <td style="color:#38BDF8;">${evKwh.toFixed(2)}</td>
               <td>${sym}${Number(d.standing_charge_gbp).toFixed(2)}</td>
               <td style="color:#F87171;">${sym}${Number(d.import_cost_gbp).toFixed(2)}</td>
               <td style="color:#34D399;">${sym}${Number(d.export_income_gbp).toFixed(2)}</td>
+              <td style="color:#38BDF8;">${sym}${evCost.toFixed(2)}</td>
+              <td style="color:#FCA5A5;">${sym}${houseCost.toFixed(2)}</td>
               <td style="font-weight:600;">${fmtMoney(rNet)}</td>
               <td style="color:#FBBF24;">${sym}${Number(d.savings_gbp).toFixed(2)}</td>
               <td style="font-weight:600;">${fmtMoney(rCum)}</td>
@@ -5309,9 +5514,12 @@
               <td>Total (${nDays}d)</td>
               <td>${Number(tot.import_kwh || 0).toFixed(2)}</td>
               <td>${Number(tot.export_kwh || 0).toFixed(2)}</td>
+              <td style="color:#38BDF8;">${Number(tot.ev_kwh || 0).toFixed(2)}</td>
               <td>${sym}${Number(tot.standing_charge_gbp || 0).toFixed(2)}</td>
               <td style="color:#F87171;">${sym}${Number(tot.import_cost_gbp || 0).toFixed(2)}</td>
               <td style="color:#34D399;">${sym}${Number(tot.export_income_gbp || 0).toFixed(2)}</td>
+              <td style="color:#38BDF8;">${sym}${Number(tot.ev_cost_gbp || 0).toFixed(2)}</td>
+              <td style="color:#FCA5A5;">${sym}${Number(tot.house_cost_gbp ?? tot.import_cost_gbp ?? 0).toFixed(2)}</td>
               <td>${fmtMoney(netVal)}</td>
               <td style="color:#FBBF24;">${sym}${Number(tot.savings_gbp || 0).toFixed(2)}</td>
               <td>${fmtMoney(cum)}</td>
@@ -5351,7 +5559,15 @@
         document.getElementById('cost-today-net').textContent = `${net < 0 ? '-' : ''}${sym}${Math.abs(net).toFixed(2)}`;
         document.getElementById('cost-today-sc').textContent = `Standing: ${sym}${Number(td.standing_charge_gbp || 0).toFixed(2)}/day`;
         document.getElementById('cost-today-imp').textContent = `${sym}${Number(td.import_cost_gbp || 0).toFixed(2)}`;
-        document.getElementById('cost-today-imp-kwh').textContent = `${Number(td.import_kwh || 0).toFixed(2)} kWh imported`;
+        const tdHouse = Number(td.house_cost_gbp ?? td.import_cost_gbp ?? 0);
+        const tdEv = Number(td.ev_cost_gbp || 0);
+        document.getElementById('cost-today-imp-kwh').textContent = `${Number(td.import_kwh || 0).toFixed(2)} kWh • House ${sym}${tdHouse.toFixed(2)} • EV ${sym}${tdEv.toFixed(2)}`;
+        const evValEl = document.getElementById('cost-today-ev');
+        if (evValEl) evValEl.textContent = `${sym}${tdEv.toFixed(2)}`;
+        const evKwhEl = document.getElementById('cost-today-ev-kwh');
+        if (evKwhEl) evKwhEl.textContent = `${Number(td.ev_kwh || 0).toFixed(2)} kWh charged`;
+        const houseValEl = document.getElementById('cost-today-house');
+        if (houseValEl) houseValEl.textContent = `${sym}${tdHouse.toFixed(2)}`;
         const cr = s.current_rates || {};
         document.getElementById('cost-today-imp-plan').textContent = cr.import_description || cr.import_label || '—';
         document.getElementById('cost-today-exp').textContent = `${sym}${Number(td.export_income_gbp || 0).toFixed(2)}`;
@@ -6032,6 +6248,7 @@
         drawForecastDailyChart();
       } else if (document.getElementById('tab-costs').classList.contains('active')) {
         if (_lastCostIntradayData) drawCostIntradayChart(_lastCostIntradayData);
+        if (_lastCostLedgerData) drawCostLedgerBarChart(_lastCostLedgerData.rows, _lastCostLedgerData.sym);
       } else if (document.getElementById('tab-bms').classList.contains('active')) {
         if (latestPayload) drawBmsCellsChart(latestPayload.battery);
         loadBmsHistoryChart();

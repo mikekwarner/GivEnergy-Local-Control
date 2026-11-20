@@ -855,6 +855,21 @@ def _avg_window_rate(side: TariffSideConfig) -> float:
     return total / 48.0
 
 
+def _off_peak_rate(
+    side: TariffSideConfig,
+    slots: list[tuple[int, int, float]] | None = None,
+) -> float:
+    """Return the lowest (off-peak) rate for a tariff, used when telemetry data is missing."""
+    if side.windows:
+        rates = [float(side.default_rate_p)] + [
+            float(w.get("rate_p", side.default_rate_p)) for w in side.windows
+        ]
+        return min(rates)
+    if side.mode == "octopus_api" and slots:
+        return min(rp for _, _, rp in slots)
+    return float(side.default_rate_p)
+
+
 def calculate_intraday_costs(
     db: Any,
     cfg: TariffConfig,
@@ -918,6 +933,9 @@ def calculate_intraday_costs(
     total_exp_p = 0.0
     total_imp_kwh = 0.0
     total_exp_kwh = 0.0
+    total_ev_kwh = 0.0
+    total_ev_grid_p = 0.0
+    total_ev_local_p = 0.0
 
     for row in series:
         ep = int(row.get("epoch", 0))
@@ -925,11 +943,15 @@ def calculate_intraday_costs(
             continue
         slot_i = min(47, max(0, (ep - start_ep) // 1800))
         grid_w = float(row.get("grid_w", row.get("grid_w_avg", 0)) or 0)
+        ev_w = max(0.0, float(row.get("ev_w", row.get("ev_w_avg", 0)) or 0))
         # GivEnergy convention: p_grid_out > 0 is export, < 0 is import
         imp_w = max(0.0, -grid_w)
         exp_w = max(0.0, grid_w)
         imp_kwh = (imp_w * dt_hours) / 1000.0
         exp_kwh = (exp_w * dt_hours) / 1000.0
+        ev_kwh = (ev_w * dt_hours) / 1000.0
+        ev_grid_kwh = (min(ev_w, imp_w) * dt_hours) / 1000.0
+        ev_local_kwh = max(0.0, ev_kwh - ev_grid_kwh)
 
         imp_r, imp_idx = _slot_rate_for_epoch(imp_tariff, ep, imp_slots, imp_idx)
         exp_r, exp_idx = _slot_rate_for_epoch(exp_tariff, ep, exp_slots, exp_idx)
@@ -947,6 +969,9 @@ def calculate_intraday_costs(
         total_exp_kwh += exp_kwh
         total_imp_p += imp_cost_p
         total_exp_p += exp_inc_p
+        total_ev_kwh += ev_kwh
+        total_ev_grid_p += ev_grid_kwh * imp_r
+        total_ev_local_p += ev_local_kwh * exp_r
 
     for b in buckets:
         b["import_kwh"] = round(b["import_kwh"], 3)
@@ -954,14 +979,20 @@ def calculate_intraday_costs(
         b["import_cost_p"] = round(b["import_cost_p"], 2)
         b["export_income_p"] = round(b["export_income_p"], 2)
 
+    total_ev_cost_p = total_ev_grid_p + total_ev_local_p
+    total_house_cost_p = max(0.0, total_imp_p - total_ev_grid_p)
+
     return {
         "date": target_date,
         "buckets": buckets,
         "totals": {
             "import_kwh": round(total_imp_kwh, 2),
             "export_kwh": round(total_exp_kwh, 2),
+            "ev_kwh": round(total_ev_kwh, 2),
             "import_cost_gbp": round(total_imp_p / 100.0, 2),
             "export_income_gbp": round(total_exp_p / 100.0, 2),
+            "ev_cost_gbp": round(total_ev_cost_p / 100.0, 2),
+            "house_cost_gbp": round(total_house_cost_p / 100.0, 2),
             "standing_charge_gbp": round(sc_p / 100.0, 2),
             "net_cost_gbp": round((total_imp_p + sc_p - total_exp_p) / 100.0, 2),
         },
@@ -984,9 +1015,12 @@ def calculate_daily_costs(
                 "days_count": 0,
                 "import_kwh": 0.0,
                 "export_kwh": 0.0,
+                "ev_kwh": 0.0,
                 "self_consumption_kwh": 0.0,
                 "import_cost_gbp": 0.0,
                 "export_income_gbp": 0.0,
+                "ev_cost_gbp": 0.0,
+                "house_cost_gbp": 0.0,
                 "standing_charge_gbp": 0.0,
                 "net_cost_gbp": 0.0,
                 "avg_daily_net_gbp": 0.0,
@@ -1022,10 +1056,13 @@ def calculate_daily_costs(
     daily_rows: list[dict[str, Any]] = []
     tot_imp_kwh = 0.0
     tot_exp_kwh = 0.0
+    tot_ev_kwh = 0.0
     tot_self_kwh = 0.0
     tot_cons_kwh = 0.0
     tot_imp_gbp = 0.0
     tot_exp_gbp = 0.0
+    tot_ev_gbp = 0.0
+    tot_house_gbp = 0.0
     tot_sc_gbp = 0.0
     tot_sav_gbp = 0.0
 
@@ -1036,6 +1073,7 @@ def calculate_daily_costs(
         avg_exp_fallback = _avg_window_rate(exp_tariff)
         imp_slots = slots_by_code.get(imp_tariff.octopus_tariff_code, []) if imp_tariff.mode == "octopus_api" else []
         exp_slots = slots_by_code.get(exp_tariff.octopus_tariff_code, []) if exp_tariff.mode == "octopus_api" else []
+        off_peak_imp_rate = _off_peak_rate(imp_tariff, imp_slots)
 
         ledger_imp_kwh = float(s.get("grid_import_kwh", 0.0) or 0.0)
         ledger_exp_kwh = float(s.get("grid_export_kwh", 0.0) or 0.0)
@@ -1045,6 +1083,10 @@ def calculate_daily_costs(
             cons_kwh = ledger_imp_kwh + self_kwh
 
         rows = by_date.get(d_str, [])
+        day_ev_kwh = 0.0
+        raw_ev_grid_p = 0.0
+        raw_ev_local_p = 0.0
+        raw_imp_p = 0.0
         if rows:
             # Determine step duration (1m if days <= 2, else 5m)
             if len(rows) >= 2:
@@ -1055,7 +1097,6 @@ def calculate_daily_costs(
 
             raw_imp_kwh = 0.0
             raw_exp_kwh = 0.0
-            raw_imp_p = 0.0
             raw_exp_p = 0.0
             imp_idx = 0
             exp_idx = 0
@@ -1063,23 +1104,44 @@ def calculate_daily_costs(
             for r in rows:
                 ep = int(r["epoch"])
                 gw = float(r.get("grid_w", r.get("grid_w_avg", 0)) or 0)
-                ik = (max(0.0, -gw) * dt_h) / 1000.0
+                ev_w = max(0.0, float(r.get("ev_w", r.get("ev_w_avg", 0)) or 0))
+                imp_w = max(0.0, -gw)
+                ik = (imp_w * dt_h) / 1000.0
                 ek = (max(0.0, gw) * dt_h) / 1000.0
+                ev_k = (ev_w * dt_h) / 1000.0
+                ev_grid_k = (min(ev_w, imp_w) * dt_h) / 1000.0
+                ev_local_k = max(0.0, ev_k - ev_grid_k)
+
                 ir, imp_idx = _slot_rate_for_epoch(imp_tariff, ep, imp_slots, imp_idx)
                 er, exp_idx = _slot_rate_for_epoch(exp_tariff, ep, exp_slots, exp_idx)
                 raw_imp_kwh += ik
                 raw_exp_kwh += ek
                 raw_imp_p += ik * ir
                 raw_exp_p += ek * er
+                day_ev_kwh += ev_k
+                raw_ev_grid_p += ev_grid_k * ir
+                raw_ev_local_p += ev_local_k * er
 
-            eff_imp_rate = (raw_imp_p / raw_imp_kwh) if raw_imp_kwh > 0.02 else avg_imp_fallback
+            if raw_imp_kwh <= 0.02:
+                eff_imp_rate = off_peak_imp_rate
+            elif ledger_imp_kwh > raw_imp_kwh + 0.5:
+                missing_imp_kwh = ledger_imp_kwh - raw_imp_kwh
+                eff_imp_rate = (raw_imp_p + missing_imp_kwh * off_peak_imp_rate) / ledger_imp_kwh
+            else:
+                eff_imp_rate = raw_imp_p / raw_imp_kwh
             eff_exp_rate = (raw_exp_p / raw_exp_kwh) if raw_exp_kwh > 0.02 else avg_exp_fallback
         else:
-            eff_imp_rate = avg_imp_fallback
+            eff_imp_rate = off_peak_imp_rate
             eff_exp_rate = avg_exp_fallback
 
         imp_cost_gbp = (ledger_imp_kwh * eff_imp_rate) / 100.0
         exp_inc_gbp = (ledger_exp_kwh * eff_exp_rate) / 100.0
+        ev_cost_gbp = (raw_ev_grid_p + raw_ev_local_p) / 100.0
+        if raw_imp_p > 0.0:
+            house_share = max(0.0, raw_imp_p - raw_ev_grid_p) / raw_imp_p
+            house_cost_gbp = imp_cost_gbp * house_share
+        else:
+            house_cost_gbp = imp_cost_gbp
         sc_gbp = day_sc_p / 100.0
         net_gbp = imp_cost_gbp + sc_gbp - exp_inc_gbp
         savings_gbp = (self_kwh * eff_imp_rate) / 100.0
@@ -1089,11 +1151,14 @@ def calculate_daily_costs(
                 "date_str": d_str,
                 "import_kwh": round(ledger_imp_kwh, 2),
                 "export_kwh": round(ledger_exp_kwh, 2),
+                "ev_kwh": round(day_ev_kwh, 2),
                 "self_consumption_kwh": round(self_kwh, 2),
                 "avg_import_rate_p": round(eff_imp_rate, 2),
                 "avg_export_rate_p": round(eff_exp_rate, 2),
                 "import_cost_gbp": round(imp_cost_gbp, 2),
                 "export_income_gbp": round(exp_inc_gbp, 2),
+                "ev_cost_gbp": round(ev_cost_gbp, 2),
+                "house_cost_gbp": round(house_cost_gbp, 2),
                 "standing_charge_gbp": round(sc_gbp, 2),
                 "net_cost_gbp": round(net_gbp, 2),
                 "savings_gbp": round(savings_gbp, 2),
@@ -1102,10 +1167,13 @@ def calculate_daily_costs(
 
         tot_imp_kwh += ledger_imp_kwh
         tot_exp_kwh += ledger_exp_kwh
+        tot_ev_kwh += day_ev_kwh
         tot_self_kwh += self_kwh
         tot_cons_kwh += cons_kwh
         tot_imp_gbp += imp_cost_gbp
         tot_exp_gbp += exp_inc_gbp
+        tot_ev_gbp += ev_cost_gbp
+        tot_house_gbp += house_cost_gbp
         tot_sc_gbp += sc_gbp
         tot_sav_gbp += savings_gbp
 
@@ -1121,10 +1189,13 @@ def calculate_daily_costs(
             "days_count": n_days,
             "import_kwh": round(tot_imp_kwh, 2),
             "export_kwh": round(tot_exp_kwh, 2),
+            "ev_kwh": round(tot_ev_kwh, 2),
             "self_consumption_kwh": round(tot_self_kwh, 2),
             "consumption_kwh": round(tot_cons_kwh, 2),
             "import_cost_gbp": round(tot_imp_gbp, 2),
             "export_income_gbp": round(tot_exp_gbp, 2),
+            "ev_cost_gbp": round(tot_ev_gbp, 2),
+            "house_cost_gbp": round(tot_house_gbp, 2),
             "standing_charge_gbp": round(tot_sc_gbp, 2),
             "net_cost_gbp": round(net_tot, 2),
             "avg_daily_net_gbp": round(net_tot / n_days, 2) if n_days else 0.0,
@@ -1192,9 +1263,12 @@ def aggregate_cost_periods(
                 "days_count": 1,
                 "import_kwh": r["import_kwh"],
                 "export_kwh": r["export_kwh"],
+                "ev_kwh": r.get("ev_kwh", 0.0),
                 "self_consumption_kwh": r["self_consumption_kwh"],
                 "import_cost_gbp": r["import_cost_gbp"],
                 "export_income_gbp": r["export_income_gbp"],
+                "ev_cost_gbp": r.get("ev_cost_gbp", 0.0),
+                "house_cost_gbp": r.get("house_cost_gbp", r["import_cost_gbp"]),
                 "standing_charge_gbp": r["standing_charge_gbp"],
                 "net_cost_gbp": r["net_cost_gbp"],
                 "avg_daily_net_gbp": r["net_cost_gbp"],
@@ -1231,9 +1305,12 @@ def aggregate_cost_periods(
                 "days_count": 0,
                 "import_kwh": 0.0,
                 "export_kwh": 0.0,
+                "ev_kwh": 0.0,
                 "self_consumption_kwh": 0.0,
                 "import_cost_gbp": 0.0,
                 "export_income_gbp": 0.0,
+                "ev_cost_gbp": 0.0,
+                "house_cost_gbp": 0.0,
                 "standing_charge_gbp": 0.0,
                 "net_cost_gbp": 0.0,
                 "savings_gbp": 0.0,
@@ -1243,9 +1320,12 @@ def aggregate_cost_periods(
         b["days_count"] += 1
         b["import_kwh"] += float(r.get("import_kwh", 0.0) or 0.0)
         b["export_kwh"] += float(r.get("export_kwh", 0.0) or 0.0)
+        b["ev_kwh"] += float(r.get("ev_kwh", 0.0) or 0.0)
         b["self_consumption_kwh"] += float(r.get("self_consumption_kwh", 0.0) or 0.0)
         b["import_cost_gbp"] += float(r.get("import_cost_gbp", 0.0) or 0.0)
         b["export_income_gbp"] += float(r.get("export_income_gbp", 0.0) or 0.0)
+        b["ev_cost_gbp"] += float(r.get("ev_cost_gbp", 0.0) or 0.0)
+        b["house_cost_gbp"] += float(r.get("house_cost_gbp", r.get("import_cost_gbp", 0.0)) or 0.0)
         b["standing_charge_gbp"] += float(r.get("standing_charge_gbp", 0.0) or 0.0)
         b["net_cost_gbp"] += float(r.get("net_cost_gbp", 0.0) or 0.0)
         b["savings_gbp"] += float(r.get("savings_gbp", 0.0) or 0.0)
@@ -1261,9 +1341,12 @@ def aggregate_cost_periods(
                 "days_count": b["days_count"],
                 "import_kwh": round(b["import_kwh"], 2),
                 "export_kwh": round(b["export_kwh"], 2),
+                "ev_kwh": round(b["ev_kwh"], 2),
                 "self_consumption_kwh": round(b["self_consumption_kwh"], 2),
                 "import_cost_gbp": round(b["import_cost_gbp"], 2),
                 "export_income_gbp": round(b["export_income_gbp"], 2),
+                "ev_cost_gbp": round(b["ev_cost_gbp"], 2),
+                "house_cost_gbp": round(b["house_cost_gbp"], 2),
                 "standing_charge_gbp": round(b["standing_charge_gbp"], 2),
                 "net_cost_gbp": round(b["net_cost_gbp"], 2),
                 "avg_daily_net_gbp": round(b["net_cost_gbp"] / dc, 2),

@@ -18,6 +18,7 @@ from givenergy_web.tariffs import (
     UK_GSP_REGIONS,
     UK_TARIFF_PRESETS,
     TariffConfig,
+    TariffHistoryEntry,
     TariffSideConfig,
     aggregate_cost_periods,
     calculate_daily_costs,
@@ -352,8 +353,11 @@ async def api_costs_summary(
         today_totals = {
             "import_kwh": today_row["import_kwh"],
             "export_kwh": today_row["export_kwh"],
+            "ev_kwh": today_row.get("ev_kwh", 0.0),
             "import_cost_gbp": today_row["import_cost_gbp"],
             "export_income_gbp": today_row["export_income_gbp"],
+            "ev_cost_gbp": today_row.get("ev_cost_gbp", 0.0),
+            "house_cost_gbp": today_row.get("house_cost_gbp", today_row["import_cost_gbp"]),
             "standing_charge_gbp": today_row["standing_charge_gbp"],
             "net_cost_gbp": today_row["net_cost_gbp"],
             "savings_gbp": today_row["savings_gbp"],
@@ -391,6 +395,10 @@ async def api_tariffs_compare(req: TariffCompareRequest, request: Request):
         baseline = calculate_daily_costs(ctx.db, tc, ctx.tariff_cache, req.days)["totals"]
         days_count = int(baseline.get("days_count", 0) or 0)
         base_net = float(baseline.get("net_cost_gbp", 0.0) or 0.0)
+        base_no_export = round(
+            float(baseline.get("import_cost_gbp", 0.0) or 0.0) + float(baseline.get("standing_charge_gbp", 0.0) or 0.0),
+            2,
+        )
 
         candidates = req.candidates
         if not candidates:
@@ -431,6 +439,7 @@ async def api_tariffs_compare(req: TariffCompareRequest, request: Request):
             else:
                 imp_side = tc.import_tariff
 
+            use_current_export = exp_p is None and cand.custom_export_rate_p is None
             if exp_p is not None:
                 exp_side = _side_from_preset(exp_p)
             elif cand.custom_export_rate_p is not None:
@@ -451,6 +460,22 @@ async def api_tariffs_compare(req: TariffCompareRequest, request: Request):
                 else float(tc.standing_charge_p)
             )
 
+            cand_history = (
+                [
+                    TariffHistoryEntry(
+                        id=e.id,
+                        effective_from=e.effective_from,
+                        standing_charge_p=sc_p,
+                        import_tariff=imp_side,
+                        export_tariff=e.export_tariff,
+                        created_at=e.created_at,
+                    )
+                    for e in tc.tariff_history
+                ]
+                if (use_current_export and tc.tariff_history)
+                else []
+            )
+
             cand_cfg = TariffConfig(
                 currency_symbol=tc.currency_symbol,
                 sub_unit_symbol=tc.sub_unit_symbol,
@@ -461,12 +486,19 @@ async def api_tariffs_compare(req: TariffCompareRequest, request: Request):
                 export_tariff=exp_side,
                 price_cap_rate_p=tc.price_cap_rate_p,
                 price_cap_standing_charge_p=tc.price_cap_standing_charge_p,
+                tariff_history=cand_history,
             )
 
             totals = calculate_daily_costs(ctx.db, cand_cfg, ctx.tariff_cache, req.days)["totals"]
             cand_net = float(totals.get("net_cost_gbp", 0.0) or 0.0)
+            cand_no_export = round(
+                float(totals.get("import_cost_gbp", 0.0) or 0.0) + float(totals.get("standing_charge_gbp", 0.0) or 0.0),
+                2,
+            )
             diff_gbp = round(cand_net - base_net, 2)
             annual_est_diff = round((diff_gbp / days_count) * 365.0, 2) if days_count > 0 else 0.0
+            diff_no_export_gbp = round(cand_no_export - base_no_export, 2)
+            annual_est_diff_no_export = round((diff_no_export_gbp / days_count) * 365.0, 2) if days_count > 0 else 0.0
 
             label = cand.name.strip() or (
                 f"{imp_side.label}" + (f" + {exp_side.label}" if exp_p is not None or cand.custom_export_rate_p is not None else "")
@@ -487,6 +519,41 @@ async def api_tariffs_compare(req: TariffCompareRequest, request: Request):
                 }
             )
 
+            # Also include a "No Export" row for comparison without export earnings
+            if use_current_export or float(exp_side.default_rate_p) > 0.0 or exp_side.windows:
+                no_exp_side = TariffSideConfig(mode="custom", label="No Export", default_rate_p=0.0, windows=[])
+                no_exp_cfg = TariffConfig(
+                    currency_symbol=tc.currency_symbol,
+                    sub_unit_symbol=tc.sub_unit_symbol,
+                    region=tc.region,
+                    postcode=tc.postcode,
+                    standing_charge_p=sc_p,
+                    import_tariff=imp_side,
+                    export_tariff=no_exp_side,
+                    price_cap_rate_p=tc.price_cap_rate_p,
+                    price_cap_standing_charge_p=tc.price_cap_standing_charge_p,
+                    tariff_history=[],
+                )
+                no_exp_totals = calculate_daily_costs(ctx.db, no_exp_cfg, ctx.tariff_cache, req.days)["totals"]
+                no_exp_net = float(no_exp_totals.get("net_cost_gbp", 0.0) or 0.0)
+                no_exp_diff = round(no_exp_net - base_net, 2)
+                no_exp_ann = round((no_exp_diff / days_count) * 365.0, 2) if days_count > 0 else 0.0
+                results.append(
+                    {
+                        "name": f"{label}, No Export",
+                        "import_rate_summary": _format_side_summary(imp_side),
+                        "export_rate_summary": "0.00p",
+                        "standing_charge_p": round(sc_p, 2),
+                        "import_cost_gbp": no_exp_totals["import_cost_gbp"],
+                        "export_income_gbp": 0.0,
+                        "standing_charge_gbp": no_exp_totals["standing_charge_gbp"],
+                        "net_cost_gbp": no_exp_totals["net_cost_gbp"],
+                        "avg_daily_net_gbp": no_exp_totals["avg_daily_net_gbp"],
+                        "diff_vs_current_gbp": no_exp_diff,
+                        "annual_est_diff_gbp": no_exp_ann,
+                    }
+                )
+
         results.sort(key=lambda r: r["net_cost_gbp"])
         return {
             "ok": True,
@@ -498,6 +565,7 @@ async def api_tariffs_compare(req: TariffCompareRequest, request: Request):
                 "import_rate_summary": _format_side_summary(tc.import_tariff),
                 "export_rate_summary": _format_side_summary(tc.export_tariff),
                 "standing_charge_p": round(tc.standing_charge_p, 2),
+                "no_export_cost_gbp": base_no_export,
                 **baseline,
             },
             "comparisons": results,

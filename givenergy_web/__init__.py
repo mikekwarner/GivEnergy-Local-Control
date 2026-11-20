@@ -1,3 +1,3 @@
 """GivEnergy Local Control & Historic Telemetry Web Service for Raspberry Pi."""
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"

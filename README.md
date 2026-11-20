@@ -102,11 +102,11 @@ Run the automated Windows setup script (`setup_dev_env.bat` / `setup_dev_env.ps1
 
 ### Android Companion App (`givenergy_android/`)
 
-Requires **Android Studio** (or **Gradle** + **JDK 17** and Android SDK `compileSdk = 37`, `minSdk = 24`):
+Requires **Android Studio** (or **JDK 17** and Android SDK `compileSdk = 37`, `minSdk = 24`) using the included Gradle wrapper:
 
 ```powershell
 cd givenergy_android
-gradle assembleDebug
+.\gradlew.bat assembleDebug
 # Output: givenergy_android\app\build\outputs\apk\debug\givenergy-local-control-debug.apk
 ```
 

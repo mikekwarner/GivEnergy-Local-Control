@@ -144,84 +144,27 @@ fun LiveScreen(state: PlantUiState) {
             }
         }
 
-        // 3x2 Power Flow Grid
+        // Live Power Flow Schematic (replaces 3x2 tile grid with animated Web-UI-style flow)
         item {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    PowerTile(
-                        title = if (state.hasSolar) "SOLAR PV" else "INVERTER",
-                        value = if (state.hasSolar) fmtWatts(inv.pPvTotal) else inv.operatingMode,
-                        sub = if (state.hasSolar) "${String.format("%.1f", inv.ePvToday)} kWh today" else "${String.format("%.0f", inv.vGrid)}V • ${String.format("%.2f", inv.fGrid)}Hz",
-                        accent = AccentSolar,
-                        modifier = Modifier.weight(1f),
-                    )
-                    val houseLoadW = max(0.0, inv.pLoad - (if (evc.enabled) evc.powerW else 0.0))
-                    PowerTile(
-                        title = "HOME LOAD",
-                        value = fmtWatts(houseLoadW),
-                        sub = "${String.format("%.1f", inv.eLoadToday)} kWh today",
-                        accent = AccentLoad,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    val batDir = when {
-                        inv.pBattery > 30 -> "Discharging ${fmtWatts(inv.pBattery)}"
-                        inv.pBattery < -30 -> "Charging ${fmtWatts(abs(inv.pBattery))}"
-                        else -> "Idle"
-                    }
-                    PowerTile(
-                        title = "BATTERY",
-                        value = "${bat.soc.roundToInt()}%",
-                        sub = batDir,
-                        accent = AccentBat,
-                        modifier = Modifier.weight(1f),
-                    )
-                    val gridImporting = inv.pGrid < -20
-                    val gridExporting = inv.pGrid > 20
-                    val gridLabel = when {
-                        gridImporting -> "Importing ${fmtWatts(abs(inv.pGrid))}"
-                        gridExporting -> "Exporting ${fmtWatts(inv.pGrid)}"
-                        else -> "Balanced (0 W)"
-                    }
-                    PowerTile(
-                        title = "GRID",
-                        value = fmtWatts(abs(inv.pGrid)),
-                        sub = gridLabel,
-                        accent = if (gridExporting) AccentGridExport else AccentGridImport,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    PowerTile(
-                        title = "EV CHARGER",
-                        value = if (evc.enabled) fmtWatts(evc.powerW) else "Disabled",
-                        sub = if (evc.enabled) "${evc.chargeStatus} • ${String.format("%.1f", evc.sessionEnergyKwh)} kWh" else "Disabled in setup",
-                        accent = AccentEvc,
-                        modifier = Modifier.weight(1f),
-                    )
-                    val cs = state.costSummary
-                    val sym = cs.currencySymbol
-                    val netPrefix = if (cs.todayNetCostGbp < 0) "-" else ""
-                    PowerTile(
-                        title = "TODAY EST. COST",
-                        value = "$netPrefix$sym${String.format("%.2f", kotlin.math.abs(cs.todayNetCostGbp))}",
-                        sub = "In $sym${String.format("%.2f", cs.todayImportCostGbp)} • Out $sym${String.format("%.2f", cs.todayExportIncomeGbp)}",
-                        accent = if (cs.todayNetCostGbp <= 0) AccentBat else AccentSolar,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
+            SectionCard(
+                title = "Real-Time Energy Flow",
+                subtitle = "Animated directional power routing",
+            ) {
+                LivePowerFlowSchematic(state = state)
             }
         }
 
-        // Live 2-Hour Power Chart (underneath power squares, above the rest)
+        // Live 2-Hour Power & SoC Timeline Chart
         if (state.liveRing.size >= 2) {
             item {
                 SectionCard(
-                    title = "Live Power Trend (Last 2 hours)",
-                    subtitle = "Yellow: PV • Purple: Load • Green: Battery • Red: Grid",
+                    title = "Real-Time Power & SoC Timeline",
+                    subtitle = "Last 2 hours • Tap or drag to inspect",
                 ) {
-                    LiveSparklineChart(points = state.liveRing)
+                    LiveTimelineChart(
+                        points = state.liveRing,
+                        hasSolar = state.hasSolar,
+                    )
                 }
             }
         }
@@ -338,45 +281,6 @@ private fun StatRow(label: String, value: String, valueColor: Color = TextMain) 
     ) {
         Text(label, color = TextMuted, fontSize = 13.sp)
         Text(value, color = valueColor, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-    }
-}
-
-@Composable
-private fun LiveSparklineChart(points: List<LivePoint>) {
-    Canvas(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(300.dp)
-    ) {
-        val w = size.width
-        val h = size.height
-        var maxAbs = 500.0
-        for (p in points) {
-            maxAbs = max(maxAbs, max(abs(p.pvW), max(abs(p.loadW), max(abs(p.gridW), abs(p.batW)))))
-        }
-        val minVal = -maxAbs
-        val range = max(1.0, maxAbs - minVal)
-
-        fun yFor(v: Double): Float = (h - ((v - minVal) / range) * h).toFloat()
-
-        // Zero baseline
-        val y0 = yFor(0.0)
-        drawLine(Color(0xFF334155), Offset(0f, y0), Offset(w, y0), strokeWidth = 1.5f)
-
-        fun drawSeries(color: Color, selector: (LivePoint) -> Double) {
-            val path = Path()
-            points.forEachIndexed { idx, pt ->
-                val x = if (points.size == 1) 0f else (idx.toFloat() / (points.size - 1)) * w
-                val y = yFor(selector(pt))
-                if (idx == 0) path.moveTo(x, y) else path.lineTo(x, y)
-            }
-            drawPath(path, color = color, style = Stroke(width = 3f, cap = StrokeCap.Round))
-        }
-
-        drawSeries(AccentGridImport) { it.gridW }
-        drawSeries(AccentBat) { it.batW }
-        drawSeries(AccentLoad) { it.loadW }
-        drawSeries(AccentSolar) { it.pvW }
     }
 }
 

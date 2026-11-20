@@ -24,9 +24,11 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CurrencyPound
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.EvStation
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -49,6 +51,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -59,6 +62,7 @@ class MainActivity : ComponentActivity() {
 
     private val apiClient = GivApiClient()
     private var uiState by mutableStateOf(PlantUiState())
+    private var pairingConfigState by mutableStateOf(PairingConfig())
     private val mainHandler = Handler(Looper.getMainLooper())
     @Volatile private var isActivityStarted = false
     @Volatile private var isConnecting = false
@@ -67,7 +71,9 @@ class MainActivity : ComponentActivity() {
     private val setupLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        if (result.resultCode == RESULT_OK || PairingStore.load(this).isConfigured) {
+        val loaded = PairingStore.load(this)
+        pairingConfigState = loaded
+        if (result.resultCode == RESULT_OK || loaded.isConfigured) {
             connectAll(force = true)
         } else {
             finish()
@@ -77,11 +83,20 @@ class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        pairingConfigState = PairingStore.load(this)
 
         setContent {
             var selectedTab by remember { mutableIntStateOf(0) }
+            var webReloadTrigger by remember { mutableIntStateOf(0) }
             val snackbarHostState = remember { SnackbarHostState() }
             val scope = rememberCoroutineScope()
+            val config = LocalConfiguration.current
+            val isTablet = config.smallestScreenWidthDp >= 600
+            val useWebView = when (pairingConfigState.uiMode) {
+                "web" -> true
+                "native" -> false
+                else -> isTablet
+            }
 
             Scaffold(
                 containerColor = Color(0xFF0B1120),
@@ -117,7 +132,23 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         actions = {
+                            if (isTablet || pairingConfigState.uiMode != "auto") {
+                                IconButton(onClick = {
+                                    val nextMode = if (useWebView) "native" else "web"
+                                    PairingStore.saveUiMode(this@MainActivity, nextMode)
+                                    pairingConfigState = pairingConfigState.copy(uiMode = nextMode)
+                                }) {
+                                    Icon(
+                                        imageVector = if (useWebView) Icons.Default.Smartphone else Icons.Default.Language,
+                                        contentDescription = if (useWebView) "Switch to Native UI" else "Switch to Web UI",
+                                        tint = Color(0xFF94A3B8),
+                                    )
+                                }
+                            }
                             IconButton(onClick = {
+                                if (useWebView) {
+                                    webReloadTrigger++
+                                }
                                 thread {
                                     try {
                                         apiClient.pollNow()
@@ -137,7 +168,8 @@ class MainActivity : ComponentActivity() {
                     )
                 },
                 bottomBar = {
-                    NavigationBar(containerColor = Color(0xFF111827)) {
+                    if (!useWebView) {
+                        NavigationBar(containerColor = Color(0xFF111827)) {
                         NavigationBarItem(
                             selected = selectedTab == 0,
                             onClick = { selectedTab = 0 },
@@ -189,6 +221,7 @@ class MainActivity : ComponentActivity() {
                             icon = { Icon(Icons.Default.Memory, contentDescription = "System") },
                             label = { Text("System", maxLines = 1, softWrap = false) },
                         )
+                        }
                     }
                 },
             ) { innerPadding ->
@@ -197,6 +230,16 @@ class MainActivity : ComponentActivity() {
                         .fillMaxSize()
                         .padding(innerPadding)
                 ) {
+                    if (useWebView) {
+                        TabletWebScreen(
+                            pairingConfig = pairingConfigState,
+                            connectionMode = uiState.connectionMode,
+                            reloadTrigger = webReloadTrigger,
+                            onOpenPairing = {
+                                setupLauncher.launch(Intent(this@MainActivity, SetupActivity::class.java))
+                            },
+                        )
+                    } else {
                     val sendControlAction: (String, String, Map<String, Any>, String) -> Unit =
                         { target, action, params, desc ->
                             thread {
@@ -391,6 +434,7 @@ class MainActivity : ComponentActivity() {
                                 setupLauncher.launch(Intent(this@MainActivity, SetupActivity::class.java))
                             },
                         )
+                    }
                     }
                 }
             }

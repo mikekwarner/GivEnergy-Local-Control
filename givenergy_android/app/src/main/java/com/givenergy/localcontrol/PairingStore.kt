@@ -7,6 +7,7 @@ data class PairingConfig(
     val funnelUrl: String = "",
     val lanUrl: String = "",
     val apiToken: String = "",
+    val uiMode: String = "auto", // "auto", "native", "web"
 ) {
     val isConfigured: Boolean
         get() = (funnelUrl.isNotBlank() && apiToken.isNotBlank()) || lanUrl.isNotBlank()
@@ -18,6 +19,7 @@ object PairingStore {
     private const val KEY_FUNNEL_URL = "funnel_url"
     private const val KEY_LAN_URL = "lan_url"
     private const val KEY_API_TOKEN = "api_token"
+    private const val KEY_UI_MODE = "ui_mode"
 
     fun normalizeUrl(raw: String): String {
         val trimmed = raw.trim().trimEnd('/')
@@ -36,6 +38,7 @@ object PairingStore {
             funnelUrl = prefs.getString(KEY_FUNNEL_URL, "") ?: "",
             lanUrl = prefs.getString(KEY_LAN_URL, "") ?: "",
             apiToken = prefs.getString(KEY_API_TOKEN, "") ?: "",
+            uiMode = prefs.getString(KEY_UI_MODE, "auto") ?: "auto",
         )
     }
 
@@ -47,5 +50,10 @@ object PairingStore {
             .putString(KEY_LAN_URL, normalizeUrl(config.lanUrl))
             .putString(KEY_API_TOKEN, config.apiToken.trim())
             .apply()
+    }
+
+    fun saveUiMode(context: Context, uiMode: String) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString(KEY_UI_MODE, uiMode).apply()
     }
 }

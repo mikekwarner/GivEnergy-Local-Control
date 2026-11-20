@@ -117,6 +117,7 @@ gradle assembleDebug
 | Port | Protocol | Purpose |
 | :--- | :--- | :--- |
 | `80` *(or custom)* | HTTP / WebSocket | GivEnergy Local Control Web Dashboard (`givenergy-web.service` / `GivEnergyLocalControl`) |
+| `443` *(optional)* | HTTPS / WSS | Tailscale Funnel remote access & Android app pairing |
 | `22` | SSH / SFTP | Remote provisioning and deployment from the Windows Installer (Pi / Linux) |
 | `8899` | TCP (Modbus) | GivEnergy Hybrid Inverter local communication |
 | `502` | TCP (Modbus) | GivEnergy EV Charger local communication |

@@ -149,10 +149,12 @@ class AsyncPlantPoller:
         config: PropertyConfig | None = None,
         broadcast_cb: Callable[[dict[str, Any]], Any] | None = None,
         config_path: Path | None = None,
+        tariff_config: Any = None,
     ) -> None:
         self.db = db
         self.config = config or PropertyConfig()
         self.config_path = config_path
+        self.tariff_config = tariff_config
         self.inverter_enabled = self.config.inverter_enabled
         self.inverter_ip = self.config.inverter_ip
         self.inverter_port = self.config.inverter_port
@@ -168,7 +170,11 @@ class AsyncPlantPoller:
         self._evc_solar_started: bool = False
         self._evc_was_scheduled: bool = False
         self._evc_scheduled_session: bool = False
+        self._evc_schedule_started: bool = False
+        self._evc_schedule_prev_in_window: bool = False
+        self._evc_schedule_handled_window: str | None = None
         self._saved_inv_discharge_limit: int | None = None
+        self._evc_last_logged_cap_pct: int | None = None
         self._sync_evc_config_to_snapshot()
         self.events: list[dict[str, str]] = []
         self._running = False
@@ -193,11 +199,86 @@ class AsyncPlantPoller:
             except Exception as exc:
                 logger.warning("Failed to persist property config: %s", exc)
 
+    @staticmethod
+    def _normalize_hhmm(raw: Any, fallback: str) -> str:
+        s = str(raw or "").strip()
+        try:
+            parts = s.split(":")
+            hh = int(parts[0])
+            mm = int(parts[1])
+            if 0 <= hh <= 23 and 0 <= mm <= 59:
+                return f"{hh:02d}:{mm:02d}"
+        except Exception:
+            pass
+        return fallback
+
+    @staticmethod
+    def _hhmm_to_minutes(hhmm: str) -> int:
+        try:
+            parts = hhmm.strip().split(":")
+            return int(parts[0]) * 60 + int(parts[1])
+        except Exception:
+            return 0
+
+    @classmethod
+    def _is_in_time_window(cls, now_min: int, start_hhmm: str, end_hhmm: str) -> bool:
+        s = cls._hhmm_to_minutes(start_hhmm)
+        e = cls._hhmm_to_minutes(end_hhmm)
+        if s == e:
+            return False
+        if s < e:
+            return s <= now_min < e
+        return now_min >= s or now_min < e
+
+    def _get_evc_schedule_windows(self) -> list[tuple[str, str, str]]:
+        """Return active schedule windows as [(start, end, label), ...]."""
+        custom_start = self._normalize_hhmm(self.config.evc_schedule_start, "00:00")
+        custom_end = self._normalize_hhmm(self.config.evc_schedule_end, "06:00")
+        if self.config.evc_schedule_use_tariff and self.tariff_config is not None:
+            imp = getattr(self.tariff_config, "import_tariff", None)
+            raw_windows = list(getattr(imp, "windows", []) or []) if imp is not None else []
+            default_rate = float(getattr(imp, "default_rate_p", 0.0) or 0.0) if imp is not None else 0.0
+            off_peak: list[tuple[str, str, str]] = []
+            fallback_wins: list[tuple[str, str, str]] = []
+            for w in raw_windows:
+                ws = self._normalize_hhmm(w.get("start"), "")
+                we = self._normalize_hhmm(w.get("end"), "")
+                if not ws or not we or ws == we:
+                    continue
+                lbl = str(w.get("label") or "Off-Peak").strip() or "Off-Peak"
+                rate = float(w.get("rate_p", default_rate))
+                if rate < default_rate:
+                    off_peak.append((ws, we, lbl))
+                else:
+                    fallback_wins.append((ws, we, lbl))
+            if off_peak:
+                return off_peak
+            if fallback_wins:
+                return fallback_wins
+        return [(custom_start, custom_end, "Custom")]
+
+    def _get_active_evc_schedule_window(self, now: datetime | None = None) -> tuple[bool, tuple[str, str, str] | None, list[tuple[str, str, str]]]:
+        windows = self._get_evc_schedule_windows()
+        dt = now or datetime.now()
+        now_min = dt.hour * 60 + dt.minute
+        for win in windows:
+            if self._is_in_time_window(now_min, win[0], win[1]):
+                return True, win, windows
+        return False, None, windows
+
     def _sync_evc_config_to_snapshot(self) -> None:
         t_evc = self.snapshot.ev_charger
         t_evc.charging_mode = self._normalize_evc_mode(self.config.evc_charging_mode)
         t_evc.max_battery_discharge_w = max(0, min(5000, int(self.config.evc_max_battery_discharge_w)))
         t_evc.solar_export_split_pct = max(0, min(100, int(self.config.evc_solar_export_split_pct)))
+        in_win, active_win, windows = self._get_active_evc_schedule_window()
+        disp_win = active_win or (windows[0] if windows else ("00:00", "06:00", "Off-Peak"))
+        t_evc.schedule_enabled = bool(self.config.evc_schedule_enabled)
+        t_evc.schedule_use_tariff = bool(self.config.evc_schedule_use_tariff)
+        t_evc.schedule_start = disp_win[0]
+        t_evc.schedule_end = disp_win[1]
+        t_evc.schedule_active = bool(self.config.evc_schedule_enabled and in_win)
+        t_evc.schedule_window_label = f"{disp_win[2]} ({disp_win[0]}–{disp_win[1]})"
 
     async def apply_config(self, cfg: PropertyConfig) -> None:
         self.config = cfg
@@ -545,8 +626,10 @@ class AsyncPlantPoller:
         t_inv.battery_discharge_min_power_reserve = int(
             getattr(inv, "battery_discharge_min_power_reserve", 4) or 4
         )
-        t_inv.battery_charge_limit = int(getattr(inv, "battery_charge_limit", 50) or 50)
-        t_inv.battery_discharge_limit = int(getattr(inv, "battery_discharge_limit", 50) or 50)
+        raw_chg_limit = getattr(inv, "battery_charge_limit", None)
+        t_inv.battery_charge_limit = int(raw_chg_limit if raw_chg_limit is not None else 50)
+        raw_dis_limit = getattr(inv, "battery_discharge_limit", None)
+        t_inv.battery_discharge_limit = int(raw_dis_limit if raw_dis_limit is not None else 50)
         t_inv.active_power_rate = int(getattr(inv, "active_power_rate", 100) or 100)
 
         cs1 = getattr(inv, "charge_slot_1", None)
@@ -800,16 +883,70 @@ class AsyncPlantPoller:
             self._evc_was_scheduled = False
             self._evc_scheduled_session = False
 
+        user_max_a = max(6, min(32, int(self.config.evc_user_charge_limit_a)))
+
+        # 0. Native Off-Peak Scheduler (local Pi clock, independent of GivEnergy Cloud)
+        in_win, active_win, _ = self._get_active_evc_schedule_window()
+        evc.schedule_active = bool(self.config.evc_schedule_enabled and in_win)
+        if self.evc_enabled and evc.connected:
+            if self.config.evc_schedule_enabled and in_win and active_win is not None:
+                win_start, win_end, win_label = active_win
+                win_key = f"{win_start}-{win_end}"
+                if not evc.cable_connected:
+                    self._evc_schedule_handled_window = None
+                elif evc.error_code == 0 and self._evc_schedule_handled_window != win_key:
+                    full_amps = max(6, min(int(evc.evse_max_current_a or 32), user_max_a))
+                    if not is_active:
+                        limit_ok = await asyncio.to_thread(self._write_evc_current_limit, full_amps)
+                        if not limit_ok:
+                            self.log_event(
+                                "warning",
+                                f"EV Charger (Schedule): Failed to set full charge limit ({full_amps}A) before start; retrying",
+                            )
+                        else:
+                            ok = await asyncio.to_thread(self._write_evc_charge_control, "Start")
+                            if ok:
+                                is_active = True
+                                self._evc_schedule_started = True
+                                self._evc_schedule_handled_window = win_key
+                                self.log_event(
+                                    "info",
+                                    f"EV Charger (Schedule): Set charge limit to {full_amps}A and started charging for {win_label} ({win_start}–{win_end})",
+                                )
+                    else:
+                        if abs(full_amps - evc.setpoint_limit_a) >= 1 or abs(full_amps - evc.charge_limit_a) >= 1:
+                            await asyncio.to_thread(self._write_evc_current_limit, full_amps)
+                        self._evc_solar_started = False
+                        self._evc_low_solar_since = None
+                        self._evc_schedule_started = True
+                        self._evc_schedule_handled_window = win_key
+            elif self.config.evc_schedule_enabled and not in_win:
+                if self._evc_schedule_prev_in_window or self._evc_schedule_started:
+                    if is_active:
+                        ok = await asyncio.to_thread(self._write_evc_charge_control, "Stop")
+                        if ok:
+                            is_active = False
+                            self.log_event(
+                                "info",
+                                "EV Charger (Schedule): Stopped charging — off-peak schedule window ended",
+                            )
+                    self._evc_schedule_started = False
+                self._evc_schedule_handled_window = None
+            else:
+                self._evc_schedule_started = False
+                self._evc_schedule_handled_window = None
+            self._evc_schedule_prev_in_window = bool(self.config.evc_schedule_enabled and in_win)
+
         # Scheduled (or externally started in Solar mode) sessions must run at full power unimpeded
         scheduled_or_external = (
             evc.charging_state == "Scheduled"
             or self._evc_scheduled_session
+            or (self.config.evc_schedule_enabled and in_win)
             or (self.config.evc_charging_mode == "Solar" and is_active and not self._evc_solar_started)
         )
 
         # 1. Dynamic Solar / Hybrid current limit adjustment (or full-power restore for scheduled sessions)
         now_ts = time.time()
-        user_max_a = max(6, min(32, int(self.config.evc_user_charge_limit_a)))
         if (
             self.evc_enabled
             and evc.connected
@@ -819,7 +956,7 @@ class AsyncPlantPoller:
             and (now_ts - self._last_evc_solar_adjust_ts >= 15.0)
         ):
             self._last_evc_solar_adjust_ts = now_ts
-            if abs(user_max_a - evc.setpoint_limit_a) >= 1:
+            if abs(user_max_a - evc.setpoint_limit_a) >= 1 or abs(user_max_a - evc.charge_limit_a) >= 1:
                 ok = await asyncio.to_thread(self._write_evc_current_limit, user_max_a)
                 if ok:
                     self.log_event(
@@ -906,10 +1043,12 @@ class AsyncPlantPoller:
                         reqs = commands.set_battery_discharge_limit(target_pct)
                         await inv_client.one_shot_command(reqs, timeout=2.5, retries=2)
                         inv.battery_discharge_limit = target_pct
-                        self.log_event(
-                            "info",
-                            f"EV Charger: Capped inverter battery discharge limit to {target_pct}% (~{max_w}W) during EV charge",
-                        )
+                        if self._evc_last_logged_cap_pct != target_pct:
+                            self._evc_last_logged_cap_pct = target_pct
+                            self.log_event(
+                                "info",
+                                f"EV Charger: Capped inverter battery discharge limit to {target_pct}% (~{max_w}W) during EV charge",
+                            )
                     except Exception as exc:
                         self.log_event("warning", f"Failed to apply EV battery discharge limit: {exc}")
             elif self._saved_inv_discharge_limit is not None:
@@ -919,6 +1058,7 @@ class AsyncPlantPoller:
                     await inv_client.one_shot_command(reqs, timeout=2.5, retries=2)
                     inv.battery_discharge_limit = restore_pct
                     self._saved_inv_discharge_limit = None
+                    self._evc_last_logged_cap_pct = None
                     self.log_event(
                         "info",
                         f"EV Charger: Restored inverter battery discharge limit to {restore_pct}%",
@@ -972,6 +1112,28 @@ class AsyncPlantPoller:
             self.log_event("success", f"EV Charger: {cmd.description}")
             return True
 
+        if cmd.action == "set_schedule":
+            if "enabled" in p:
+                self.config.evc_schedule_enabled = bool(p["enabled"])
+            if "use_tariff" in p:
+                self.config.evc_schedule_use_tariff = bool(p["use_tariff"])
+            if "start" in p:
+                self.config.evc_schedule_start = self._normalize_hhmm(
+                    p.get("start"), self.config.evc_schedule_start
+                )
+            if "end" in p:
+                self.config.evc_schedule_end = self._normalize_hhmm(
+                    p.get("end"), self.config.evc_schedule_end
+                )
+            self._evc_schedule_handled_window = None
+            if not self.config.evc_schedule_enabled:
+                self._evc_schedule_started = False
+                self._evc_schedule_prev_in_window = False
+            self._sync_evc_config_to_snapshot()
+            self._save_config_safe()
+            self.log_event("success", f"EV Charger: {cmd.description}")
+            return True
+
         client = ModbusTcpClient(self.evc_ip, port=self.evc_port, timeout=3.0)
         try:
             if not client.connect():
@@ -985,6 +1147,8 @@ class AsyncPlantPoller:
                 if not (hasattr(res, "isError") and res.isError()):
                     self._evc_solar_started = False
                     self._evc_low_solar_since = None
+                    if raw_mode == "Stop":
+                        self._evc_schedule_started = False
             elif cmd.action == "plug_and_go":
                 val = 0 if p.get("enabled") else 1
                 res = client.write_registers(93, [val], device_id=1)

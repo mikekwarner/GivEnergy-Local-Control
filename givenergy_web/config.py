@@ -29,6 +29,10 @@ class PropertyConfig:
     evc_max_battery_discharge_w: int = 0  # 0..5000 W
     evc_solar_export_split_pct: int = 0  # 0..100 %
     evc_user_charge_limit_a: int = 32
+    evc_schedule_enabled: bool = False
+    evc_schedule_use_tariff: bool = True
+    evc_schedule_start: str = "00:00"
+    evc_schedule_end: str = "06:00"
 
 
 def _env_bool(name: str, default: bool) -> bool:

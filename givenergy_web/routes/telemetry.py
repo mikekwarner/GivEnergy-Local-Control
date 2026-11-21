@@ -148,6 +148,10 @@ async def api_save_config(req: PropertyConfigRequest, request: Request):
         evc_max_battery_discharge_w=ctx.poller.config.evc_max_battery_discharge_w,
         evc_solar_export_split_pct=ctx.poller.config.evc_solar_export_split_pct,
         evc_user_charge_limit_a=ctx.poller.config.evc_user_charge_limit_a,
+        evc_schedule_enabled=ctx.poller.config.evc_schedule_enabled,
+        evc_schedule_use_tariff=ctx.poller.config.evc_schedule_use_tariff,
+        evc_schedule_start=ctx.poller.config.evc_schedule_start,
+        evc_schedule_end=ctx.poller.config.evc_schedule_end,
     )
     save_config(ctx.paths.config_path, cfg)
     ctx.property_config = cfg

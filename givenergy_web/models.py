@@ -225,6 +225,12 @@ class EVChargerTelemetry:
     charging_mode: str = "Grid"  # "Solar", "Hybrid", or "Grid"
     max_battery_discharge_w: int = 0  # 0..5000 W
     solar_export_split_pct: int = 0  # 0..100 %
+    schedule_enabled: bool = False
+    schedule_use_tariff: bool = True
+    schedule_start: str = "00:00"
+    schedule_end: str = "06:00"
+    schedule_active: bool = False
+    schedule_window_label: str = ""
 
     # Session & Lifetime Energy
     session_energy_kwh: float = 0.0

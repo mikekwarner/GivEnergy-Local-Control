@@ -140,6 +140,7 @@ def create_app(
             config=property_config,
             broadcast_cb=ws_hub.broadcast,
             config_path=paths.config_path,
+            tariff_config=tariff_config,
         )
         ctx = AppContext(
             app_version=APP_VERSION,

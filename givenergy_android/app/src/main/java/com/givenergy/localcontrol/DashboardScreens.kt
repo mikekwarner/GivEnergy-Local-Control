@@ -452,12 +452,16 @@ fun EvChargerScreen(
     var maxBatDischargeW by remember { mutableFloatStateOf(evc.maxBatteryDischargeW.toFloat()) }
     var solarExportSplitPct by remember { mutableFloatStateOf(evc.solarExportSplitPct.toFloat()) }
     var evcAmps by remember { mutableFloatStateOf(evc.chargeLimitA.toFloat()) }
+    var schedStart by remember { mutableStateOf(evc.scheduleStart) }
+    var schedEnd by remember { mutableStateOf(evc.scheduleEnd) }
 
     val isDynamicSolar = evc.chargingMode.equals("Solar", ignoreCase = true) ||
         evc.chargingMode.equals("Hybrid", ignoreCase = true)
 
     LaunchedEffect(evc.maxBatteryDischargeW) { maxBatDischargeW = evc.maxBatteryDischargeW.toFloat() }
     LaunchedEffect(evc.solarExportSplitPct) { solarExportSplitPct = evc.solarExportSplitPct.toFloat() }
+    LaunchedEffect(evc.scheduleStart) { schedStart = evc.scheduleStart }
+    LaunchedEffect(evc.scheduleEnd) { schedEnd = evc.scheduleEnd }
     LaunchedEffect(evc.chargeLimitA, isDynamicSolar) {
         if (!isDynamicSolar) {
             evcAmps = evc.chargeLimitA.toFloat()
@@ -650,6 +654,113 @@ fun EvChargerScreen(
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text("Apply Solar Export Split ($roundedSplit%)")
+                    }
+                }
+            }
+
+            item {
+                val winLabel = evc.scheduleWindowLabel.ifBlank { "${evc.scheduleStart}–${evc.scheduleEnd}" }
+                val schedSubtitle = when {
+                    !evc.scheduleEnabled -> "DISABLED • $winLabel"
+                    evc.scheduleActive -> "ACTIVE • $winLabel"
+                    else -> "ARMED • $winLabel"
+                }
+                SectionCard(
+                    title = "🕒 Native Off-Peak Scheduler",
+                    subtitle = schedSubtitle,
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("Enable Off-Peak Schedule", color = TextMain, fontSize = 14.sp)
+                        Switch(
+                            checked = evc.scheduleEnabled,
+                            onCheckedChange = { enabled ->
+                                onControl(
+                                    "evc",
+                                    "set_schedule",
+                                    mapOf("enabled" to enabled),
+                                    if (enabled) "Enable Native Off-Peak Scheduler" else "Disable Native Off-Peak Scheduler",
+                                )
+                            },
+                        )
+                    }
+
+                    HorizontalDivider(color = BorderCard, modifier = Modifier.padding(vertical = 8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("Follow Tariff Off-Peak", color = TextMain, fontSize = 14.sp)
+                        Switch(
+                            checked = evc.scheduleUseTariff,
+                            onCheckedChange = { useTariff ->
+                                onControl(
+                                    "evc",
+                                    "set_schedule",
+                                    mapOf("use_tariff" to useTariff),
+                                    if (useTariff) "Use Tariff Off-Peak Window" else "Use Custom Schedule Times",
+                                )
+                            },
+                        )
+                    }
+
+                    if (!evc.scheduleUseTariff) {
+                        Spacer(Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            OutlinedTextField(
+                                value = schedStart,
+                                onValueChange = { schedStart = it },
+                                label = { Text("Start (HH:MM)") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f),
+                            )
+                            OutlinedTextField(
+                                value = schedEnd,
+                                onValueChange = { schedEnd = it },
+                                label = { Text("End (HH:MM)") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = {
+                                onControl(
+                                    "evc",
+                                    "set_schedule",
+                                    mapOf("use_tariff" to false, "start" to schedStart.trim(), "end" to schedEnd.trim()),
+                                    "Set Off-Peak Schedule to ${schedStart.trim()}–${schedEnd.trim()}",
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Apply Custom Times (${schedStart.trim()}–${schedEnd.trim()})")
+                        }
+                    }
+
+                    Spacer(Modifier.height(10.dp))
+                    val warnAmber = Color(0xFFFBBF24)
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = warnAmber.copy(alpha = 0.14f)),
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(1.dp, warnAmber.copy(alpha = 0.45f)),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            text = "⚠️ Local scheduling runs independently of GivEnergy Cloud (Modbus does not expose cloud schedule registers). Turn off GivEnergy Cloud EV scheduling in the GivEnergy App to use off-peak tariff times without conflicts.",
+                            color = warnAmber,
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp,
+                            modifier = Modifier.padding(10.dp),
+                        )
                     }
                 }
             }

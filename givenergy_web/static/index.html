@@ -1656,7 +1656,32 @@
             <div class="panel-header">
               <div>
                 <div class="panel-title" style="color:#F472B6;">🚗 EV Charger Mode &amp; Solar / Battery Integration</div>
-                <div class="panel-sub">Configure charge mode, Plug &amp; Go, home battery discharge cap &amp; solar export split</div>
+                <div class="panel-sub">Configure off-peak schedule, charge mode, Plug &amp; Go, home battery discharge cap &amp; solar export split</div>
+              </div>
+            </div>
+
+            <div class="ctrl-group">
+              <div class="ctrl-label">
+                <span>Native Off-Peak Scheduler (Local Clock)</span>
+                <span id="evc-sched-status-lbl" style="color:var(--text-muted); font-family:var(--font-mono);">DISABLED</span>
+              </div>
+              <div class="btn-row" style="margin-bottom:8px;">
+                <button id="btn-evc-sched-on" class="btn" onclick="setEvcSchedule({enabled:true},'Enable Native Off-Peak Scheduler')">Enable Schedule</button>
+                <button id="btn-evc-sched-off" class="btn primary" onclick="setEvcSchedule({enabled:false},'Disable Native Off-Peak Scheduler')">Disable</button>
+              </div>
+              <div class="btn-row" style="margin-bottom:8px;">
+                <button id="btn-evc-sched-tariff" class="btn primary" onclick="setEvcSchedule({use_tariff:true},'Use Tariff Off-Peak Window')">Follow Tariff Off-Peak</button>
+                <button id="btn-evc-sched-custom" class="btn" onclick="setEvcSchedule({use_tariff:false},'Use Custom Schedule Times')">Custom Times</button>
+              </div>
+              <div class="input-row">
+                <span style="font-size:12px; color:var(--text-muted);">Start:</span>
+                <input type="time" id="evc-sched-start" value="00:00" style="width:105px;" />
+                <span style="font-size:12px; color:var(--text-muted);">End:</span>
+                <input type="time" id="evc-sched-end" value="06:00" style="width:105px;" />
+                <button id="btn-evc-sched-apply" class="btn primary" onclick="applyEvcScheduleTimes()">Apply</button>
+              </div>
+              <div id="evc-sched-desc" style="font-size:11.5px; color:#FBBF24; background:rgba(245,158,11,0.10); border:1px solid rgba(245,158,11,0.35); border-radius:6px; padding:8px 10px; margin-top:8px; line-height:1.4;">
+                ⚠️ <strong>Cloud Warning:</strong> Local scheduling runs independently of GivEnergy Cloud (Modbus does not expose cloud schedule registers). <strong>Turn off GivEnergy Cloud EV scheduling</strong> in the GivEnergy App to use off-peak tariff times without conflicts.
               </div>
             </div>
 
@@ -2070,6 +2095,23 @@
             <button class="btn" onclick="setEvcAmps(16)">16A (3.7kW)</button>
             <button class="btn" onclick="setEvcAmps(24)">24A (5.5kW)</button>
             <button class="btn" onclick="setEvcAmps(32)">32A (7.4kW)</button>
+          </div>
+        </div>
+
+        <div class="ctrl-group">
+          <div class="ctrl-label">
+            <span>Native Off-Peak Scheduler</span>
+            <span id="ctrl-evc-sched-status-lbl" style="color:var(--text-muted); font-family:var(--font-mono);">DISABLED</span>
+          </div>
+          <div class="btn-row">
+            <button id="btn-ctrl-evc-sched-on" class="btn" onclick="setEvcSchedule({enabled:true},'Enable Native Off-Peak Scheduler')">Enable Schedule</button>
+            <button id="btn-ctrl-evc-sched-off" class="btn primary" onclick="setEvcSchedule({enabled:false},'Disable Native Off-Peak Scheduler')">Disable</button>
+          </div>
+          <div id="ctrl-evc-sched-window-lbl" style="font-size:11.5px; color:var(--text-muted); margin-top:6px;">
+            Window: Off-Peak (00:00–06:00)
+          </div>
+          <div style="font-size:11px; color:#FBBF24; margin-top:4px;">
+            ⚠️ Runs independently of GivEnergy Cloud — turn off Cloud EV scheduling in the GivEnergy App.
           </div>
         </div>
       </div>
@@ -2535,6 +2577,55 @@
         if (splitInp) splitInp.value = expSplit;
       }
 
+      const schedEnabled = !!evc.schedule_enabled;
+      const schedUseTariff = evc.schedule_use_tariff !== false;
+      const schedActive = !!evc.schedule_active;
+      const schedWinLbl = evc.schedule_window_label || `${evc.schedule_start || '00:00'}–${evc.schedule_end || '06:00'}`;
+      const schedStatusText = !schedEnabled
+        ? 'DISABLED'
+        : (schedActive ? `ACTIVE (${schedWinLbl})` : `ARMED (${schedWinLbl})`);
+      const schedStatusColor = !schedEnabled
+        ? 'var(--text-muted)'
+        : (schedActive ? '#34D399' : '#60A5FA');
+
+      ['evc-sched-status-lbl', 'ctrl-evc-sched-status-lbl'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+          el.textContent = schedStatusText;
+          el.style.color = schedStatusColor;
+        }
+      });
+      const ctrlWinEl = document.getElementById('ctrl-evc-sched-window-lbl');
+      if (ctrlWinEl) ctrlWinEl.textContent = `Window: ${schedWinLbl} • ${schedUseTariff ? 'Following Tariff Off-Peak' : 'Custom Times'}`;
+
+      [
+        ['btn-evc-sched-on', 'btn-evc-sched-off'],
+        ['btn-ctrl-evc-sched-on', 'btn-ctrl-evc-sched-off'],
+      ].forEach(([onId, offId]) => {
+        const onBtn = document.getElementById(onId);
+        const offBtn = document.getElementById(offId);
+        if (onBtn) onBtn.className = 'btn' + (schedEnabled ? ' success' : '');
+        if (offBtn) offBtn.className = 'btn' + (!schedEnabled ? ' primary' : '');
+      });
+
+      const btnTariff = document.getElementById('btn-evc-sched-tariff');
+      const btnCustom = document.getElementById('btn-evc-sched-custom');
+      if (btnTariff) btnTariff.className = 'btn' + (schedUseTariff ? ' primary' : '');
+      if (btnCustom) btnCustom.className = 'btn' + (!schedUseTariff ? ' primary' : '');
+
+      const schedStartEl = document.getElementById('evc-sched-start');
+      const schedEndEl = document.getElementById('evc-sched-end');
+      const schedApplyBtn = document.getElementById('btn-evc-sched-apply');
+      if (schedStartEl && document.activeElement !== schedStartEl) {
+        schedStartEl.value = evc.schedule_start || '00:00';
+        schedStartEl.disabled = schedUseTariff;
+      }
+      if (schedEndEl && document.activeElement !== schedEndEl) {
+        schedEndEl.value = evc.schedule_end || '06:00';
+        schedEndEl.disabled = schedUseTariff;
+      }
+      if (schedApplyBtn) schedApplyBtn.disabled = schedUseTariff;
+
       const invModeSummary = inv.operating_mode_summary || '—';
       document.getElementById('ctrl-inv-mode-lbl').textContent = invModeSummary;
       const btnInvEco = document.getElementById('btn-inv-mode-eco');
@@ -2734,6 +2825,19 @@
       if (inp) inp.value = pct;
       if (lbl) lbl.textContent = `${pct}% Export / ${100 - pct}% EV`;
       sendControl('evc', 'set_solar_export_split', { split_pct: pct }, `Set Solar Export Split to ${pct}%`);
+    }
+
+    function setEvcSchedule(params, desc) {
+      sendControl('evc', 'set_schedule', params, desc);
+    }
+
+    function applyEvcScheduleTimes() {
+      const start = document.getElementById('evc-sched-start')?.value || '00:00';
+      const end = document.getElementById('evc-sched-end')?.value || '06:00';
+      setEvcSchedule(
+        { use_tariff: false, start: start, end: end },
+        `Set Off-Peak Schedule to ${start}–${end}`
+      );
     }
 
     function updateEvcTab(evc, inv) {

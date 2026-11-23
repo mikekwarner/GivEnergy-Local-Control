@@ -1,4 +1,4 @@
-# GivEnergy Local Control (`v2.1.1`)
+# GivEnergy Local Control (`v2.2.0`)
 
 Local, cloud-free monitoring, control, and historic telemetry server for **GivEnergy Hybrid Inverters, Batteries, and EV Chargers** — running 24/7 on **Raspberry Pi**, **Ubuntu / Debian Linux**, or as a native **Windows Service**, with a **Windows Deployment Wizard**, **Local Linux Installer**, and **Android Companion App**.
 
@@ -11,6 +11,7 @@ Local, cloud-free monitoring, control, and historic telemetry server for **GivEn
 ## Key Features
 
 - **100% Local Modbus TCP Control** — Direct local communication with GivEnergy Hybrid Inverters (`:8899`) and EV Chargers (`:502`) with no cloud dependency.
+- **Full Inverter Control Tab & Low-SoC Discharge Guard** — Dedicated **⚡ Inverter** tab exposing all Charge & Discharge Time Slots (`1–2` on standard models, `1–10` on extended-slot Gen 3 / AIO / 3-Phase inverters), Battery Pause Mode & Window, AC-Coupled/AIO settings (`HR 311–317`), SoC Reserves, C-Rate / Active Power Limits, RTC/Reboot controls, an **Active AC Charge Slots** sidebar summary, and an automatic **Low-SoC Discharge Guard** (with +2% hysteresis) that caps `battery_discharge_limit` to `0%` whenever `battery_soc <= battery_soc_reserve`.
 - **Multi-Platform Hosting (Raspberry Pi, Linux & Windows Service)** — Runs as a `systemd` service on Raspberry Pi OS / Ubuntu / Debian or as a native Windows Service (`GivEnergyLocalControl`), with dual-stack IPv4/IPv6 binding and automatic platform adaptation in the Web UI and Android app.
 - **Smart EV Charger Modes (Solar / Hybrid / Grid) & Native Off-Peak Scheduler** — Dynamic excess-solar EV charging with configurable **Solar Export Split %**, **Max Battery Discharge Power to EV**, automatic Solar start/stop, schedule-safe full-power operation, and a **Native Off-Peak Scheduler** running on the host's local clock (GMT/BST, following your configured Tariff Off-Peak window or custom times) independently of GivEnergy Cloud.
 - **Real-Time Power Flow & Live Dashboard** — Responsive web UI (desktop & mobile) with WebSocket updates, live power flow schematic (showing house-only Home Demand while keeping EV load in historic totals), KPI cards, double-height 2-hour timeline chart (backfilled from 1-minute SQLite history on startup), configurable polling rate (`5s` / `10s` / `15s` / `30s` / `1m`), and a **Clock Sync & Connection** panel displaying local time alongside Inverter and EV Charger RTC clock drift.
@@ -27,9 +28,9 @@ Local, cloud-free monitoring, control, and historic telemetry server for **GivEn
 
 ---
 
-## Downloads (`v2.1.1`)
+## Downloads (`v2.2.0`)
 
-All release packages are available on the [**v2.1.1 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v2.1.1):
+All release packages are available on the [**v2.2.0 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v2.2.0):
 
 | Package | Platform | Purpose |
 | :--- | :--- | :--- |
@@ -43,7 +44,7 @@ All release packages are available on the [**v2.1.1 Release**](https://github.co
 
 ### Option A: Windows Deployment Wizard (Pi, Remote Linux, or This Windows PC)
 
-1. Download **`GivEnergy-Local-Control-Installer.exe`** from the [**v2.1.1 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v2.1.1).
+1. Download **`GivEnergy-Local-Control-Installer.exe`** from the [**v2.2.0 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v2.2.0).
 2. Double-click `GivEnergy-Local-Control-Installer.exe`:
    - **Step 1 (Target OS):** Choose **Raspberry Pi**, **Linux PC / Server / VM (Ubuntu / Debian)**, or **This Windows PC (Local Windows Service)** (includes an Optimal Setup Guide for power efficiency and storage longevity).
    - **Step 2 (Prerequisites):**
@@ -70,7 +71,7 @@ chmod +x install_linux.sh install_linux.py
 
 ## Android Companion App
 
-1. Download **`givenergy-local-control.apk`** from the [**v2.1.1 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v2.1.1) and install it on your Android device (enable *Install unknown apps* if prompted).
+1. Download **`givenergy-local-control.apk`** from the [**v2.2.0 Release**](https://github.com/mikekwarner/GivEnergy-Local-Control/releases/tag/v2.2.0) and install it on your Android device (enable *Install unknown apps* if prompted).
 2. Enable **Tailscale Funnel** (or use your local LAN URL) and view your pairing details under **⚙ Property Setup → Remote Access**.
 3. Open **GivEnergy Local Control** on your phone/tablet and scan the **QR Code** (or paste your URL and Bearer Token) to pair.
 

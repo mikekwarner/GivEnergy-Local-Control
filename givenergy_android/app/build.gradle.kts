@@ -11,8 +11,8 @@ android {
         applicationId = "com.givenergy.localcontrol"
         minSdk = 24
         targetSdk = 36
-        versionCode = 14
-        versionName = "2.1.1"
+        versionCode = 15
+        versionName = "2.2.0"
     }
 
     base {

@@ -152,6 +152,7 @@ async def api_save_config(req: PropertyConfigRequest, request: Request):
         evc_schedule_use_tariff=ctx.poller.config.evc_schedule_use_tariff,
         evc_schedule_start=ctx.poller.config.evc_schedule_start,
         evc_schedule_end=ctx.poller.config.evc_schedule_end,
+        low_soc_discharge_guard=ctx.poller.config.low_soc_discharge_guard,
     )
     save_config(ctx.paths.config_path, cfg)
     ctx.property_config = cfg

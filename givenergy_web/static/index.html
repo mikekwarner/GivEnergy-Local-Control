@@ -177,6 +177,16 @@
       opacity: 0.45;
       cursor: not-allowed;
     }
+    .btn.primary:disabled,
+    .btn.success:disabled,
+    .btn.danger:disabled,
+    .btn.amber:disabled {
+      opacity: 0.95;
+      cursor: default;
+    }
+    .btn:disabled:active {
+      transform: none;
+    }
     .btn.primary {
       background: #1D4ED8;
       border-color: #3B82F6;
@@ -838,6 +848,7 @@
         <button class="tab-btn" onclick="switchTab('history', this)">📈 Historic Analytics &amp; Daily Ledger</button>
         <button class="tab-btn" id="tab-btn-forecast" onclick="switchTab('forecast', this)">☀ Solar Forecast</button>
         <button class="tab-btn" id="tab-btn-costs" onclick="switchTab('costs', this)">💷 Costs &amp; Tariffs</button>
+        <button class="tab-btn" id="tab-btn-inverter" onclick="switchTab('inverter', this)">⚡ Inverter</button>
         <button class="tab-btn" id="tab-btn-bms" onclick="switchTab('bms', this)">🔋 Battery &amp; BMS</button>
         <button class="tab-btn" id="tab-btn-evc" onclick="switchTab('evc', this)">🚗 EV Charger</button>
         <button class="tab-btn" onclick="switchTab('grid', this)">🔌 Grid Voltage History</button>
@@ -1186,35 +1197,35 @@
       <!-- TAB 2B: COSTS & TARIFFS -->
       <section class="tab-pane" id="tab-costs">
         <div class="kpi-strip compact" style="margin-bottom:14px;">
-          <div class="kpi-card" style="--accent: #38BDF8;">
+          <div class="kpi-card" style="--accent: #38BDF8;" title="Today's net electricity bill: Import Cost + Standing Charge − Export Earnings. Negative means net credit earned today.">
             <div class="kpi-title">📅 Today Net Cost</div>
             <div class="kpi-val" id="cost-today-net">—</div>
             <div class="kpi-sub" id="cost-today-sc">Standing: —</div>
           </div>
-          <div class="kpi-card" style="--accent: #38BDF8;">
+          <div class="kpi-card" style="--accent: #38BDF8;" title="Estimated EV charging cost today: grid-imported EV energy priced at the active import rate, plus Solar/Hybrid EV energy priced at the export rate (opportunity cost).">
             <div class="kpi-title">🚗 Today EV Cost</div>
             <div class="kpi-val" id="cost-today-ev">—</div>
             <div class="kpi-sub" id="cost-today-ev-kwh">— kWh</div>
             <div class="kpi-sub2">Grid + Solar/Hybrid (exp rate)</div>
           </div>
-          <div class="kpi-card" style="--accent: #FCA5A5;">
+          <div class="kpi-card" style="--accent: #FCA5A5;" title="Today's household electricity import cost excluding daily standing charge and EV charging.">
             <div class="kpi-title">🏠 Today Home Cost</div>
             <div class="kpi-val" id="cost-today-house">—</div>
             <div class="kpi-sub">Excl. standing charge &amp; EV</div>
           </div>
-          <div class="kpi-card" style="--accent: #EF4444;">
+          <div class="kpi-card" style="--accent: #EF4444;" title="Total cost of grid electricity imported today (Home + Battery AC Charge + Grid EV), calculated using your active import tariff windows.">
             <div class="kpi-title">⬇ Today Import Cost</div>
             <div class="kpi-val" id="cost-today-imp">—</div>
             <div class="kpi-sub" id="cost-today-imp-kwh">— kWh</div>
             <div class="kpi-sub2" id="cost-today-imp-plan">—</div>
           </div>
-          <div class="kpi-card" style="--accent: #10B981;">
+          <div class="kpi-card" style="--accent: #10B981;" title="Total revenue earned from solar/battery energy exported to the grid today, calculated using your active export tariff.">
             <div class="kpi-title">⬆ Today Export Earnings</div>
             <div class="kpi-val" id="cost-today-exp">—</div>
             <div class="kpi-sub" id="cost-today-exp-kwh">— kWh</div>
             <div class="kpi-sub2" id="cost-today-exp-plan">—</div>
           </div>
-          <div class="kpi-card" style="--accent: #F59E0B;">
+          <div class="kpi-card" style="--accent: #F59E0B;" title="Estimated grid import cost avoided today by powering your home directly from Solar PV and Battery discharge instead of buying from the grid.">
             <div class="kpi-title">☀ Today Self-Use Savings</div>
             <div class="kpi-val" id="cost-today-sav">—</div>
             <div class="kpi-sub" id="cost-30d-summary">30d Net: —</div>
@@ -1257,8 +1268,8 @@
             <canvas id="costLedgerBarCanvas" height="210"></canvas>
             <div class="chart-tooltip" id="costLedgerTooltip"></div>
           </div>
-          <div class="table-wrap" style="max-height:520px; overflow:auto;">
-            <table>
+          <div class="data-table-wrap" style="max-height:520px;">
+            <table class="data-table">
               <thead>
                 <tr>
                   <th>Period</th>
@@ -1270,8 +1281,8 @@
                   <th>Exp Earn</th>
                   <th title="Actual EV charging cost: grid import at import rate + solar/hybrid at export rate">EV Cost</th>
                   <th title="Actual household electricity cost excluding standing charges &amp; EV charging">House Cost</th>
-                  <th>Net Cost</th>
                   <th>Solar/Batt Saving</th>
+                  <th>Net Cost</th>
                   <th>Current Total</th>
                 </tr>
               </thead>
@@ -1572,6 +1583,227 @@
                 <tr><td colspan="9" style="text-align:center; color:var(--text-muted);">Select tariffs above or click <b>⚡ Compare All UK Presets</b> to compare against your current tariff.</td></tr>
               </tbody>
             </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB: INVERTER FULL CONTROLS & SCHEDULES -->
+      <section class="tab-pane" id="tab-inverter">
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:10px; margin-bottom:14px;">
+          <div class="kpi-card" style="--accent: #60A5FA;">
+            <div class="kpi-title">🔌 Inverter Model</div>
+            <div class="kpi-val" id="inv-tab-model" style="font-size:17px;">—</div>
+            <div class="kpi-sub" id="inv-tab-serial">S/N: —</div>
+          </div>
+          <div class="kpi-card" style="--accent: #34D399;">
+            <div class="kpi-title">⚙ Operating Mode</div>
+            <div class="kpi-val" id="inv-tab-mode" style="font-size:16px;">—</div>
+            <div class="kpi-sub" id="inv-tab-status">Status: —</div>
+          </div>
+          <div class="kpi-card" style="--accent: #F59E0B;">
+            <div class="kpi-title">🔋 Charge / Discharge</div>
+            <div class="kpi-val" id="inv-tab-sched" style="font-size:16px;">—</div>
+            <div class="kpi-sub" id="inv-tab-slots-cap">Slots: —</div>
+          </div>
+          <div class="kpi-card" style="--accent: #A78BFA;">
+            <div class="kpi-title">⚡ Active Power &amp; Limits</div>
+            <div class="kpi-val" id="inv-tab-power-rate" style="font-size:17px;">— %</div>
+            <div class="kpi-sub" id="inv-tab-dc-limits">DC Chg/Dis: —</div>
+          </div>
+        </div>
+
+        <div class="two-col" style="margin-bottom:14px;">
+          <!-- Left: Operating Mode, Enables, SoC & Power Limits -->
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <div class="panel-title" style="color:#60A5FA;">⚡ Operating Mode, SoC &amp; Power Limits</div>
+                <div class="panel-sub">Full inverter operating mode, scheduled enables, SoC reserves &amp; C-rate / power caps</div>
+              </div>
+            </div>
+
+            <div class="ctrl-group">
+              <div class="ctrl-label">
+                <span>Operating Mode</span>
+                <span id="inv-tab-mode-lbl" style="color:#34D399;">—</span>
+              </div>
+              <div class="btn-row">
+                <button id="inv-tab-btn-eco" class="btn" onclick="sendControl('inverter','set_mode_eco',{},'Set Eco / Dynamic Mode')">🌱 Eco Mode</button>
+                <button id="inv-tab-btn-timed-dis" class="btn" onclick="sendControl('inverter','set_mode_timed_discharge',{},'Set Timed Demand Mode')">⏱ Timed Dischg</button>
+                <button id="inv-tab-btn-timed-exp" class="btn" onclick="sendControl('inverter','set_mode_timed_export',{},'Set Timed Export Mode')">📤 Timed Export</button>
+              </div>
+            </div>
+
+            <div class="ctrl-group">
+              <div class="ctrl-label">
+                <span>Schedule &amp; Target Enables</span>
+                <span id="inv-tab-enables-lbl" style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">—</span>
+              </div>
+              <div class="btn-row" style="margin-bottom:6px;">
+                <button id="inv-tab-chg-on" class="btn" onclick="sendControl('inverter','set_enable_charge',{enabled:true},'Enable Scheduled AC Charge')">AC Chg ON</button>
+                <button id="inv-tab-chg-off" class="btn" onclick="sendControl('inverter','set_enable_charge',{enabled:false},'Disable Scheduled AC Charge')">AC Chg OFF</button>
+                <button id="inv-tab-dis-on" class="btn" onclick="sendControl('inverter','set_enable_discharge',{enabled:true},'Enable Scheduled Discharge')">Dischg ON</button>
+                <button id="inv-tab-dis-off" class="btn" onclick="sendControl('inverter','set_enable_discharge',{enabled:false},'Disable Scheduled Discharge')">Dischg OFF</button>
+              </div>
+              <div class="btn-row">
+                <button id="inv-tab-tgt-on" class="btn" onclick="sendControl('inverter','set_enable_charge_target',{enabled:true,soc:parseInt(document.getElementById('inv-tab-target-soc').value)||100},'Enable Charge Target SoC')">Target SoC ON</button>
+                <button id="inv-tab-tgt-off" class="btn" onclick="sendControl('inverter','set_enable_charge_target',{enabled:false},'Disable Charge Target SoC (100%)')">Target SoC OFF</button>
+              </div>
+            </div>
+
+            <div class="ctrl-group">
+              <div class="ctrl-label"><span>SoC Targets &amp; Reserves (4–100%)</span></div>
+              <div class="input-row">
+                <span style="flex:1; font-size:12px; color:var(--text-muted);">Charge Target SoC (HR 116):</span>
+                <input type="number" id="inv-tab-target-soc" min="4" max="100" value="100" style="width:72px;" />
+                <button class="btn primary" onclick="sendControl('inverter','set_charge_target_soc',{soc:parseInt(document.getElementById('inv-tab-target-soc').value)},'Set Charge Target SoC to '+document.getElementById('inv-tab-target-soc').value+'%')">Apply</button>
+              </div>
+              <div class="input-row">
+                <span style="flex:1; font-size:12px; color:var(--text-muted);">Min SoC Reserve / Shallow Charge (HR 110):</span>
+                <input type="number" id="inv-tab-reserve-soc" min="4" max="100" value="4" style="width:72px;" />
+                <button class="btn primary" onclick="sendControl('inverter','set_battery_soc_reserve',{soc:parseInt(document.getElementById('inv-tab-reserve-soc').value)},'Set Min SoC Reserve to '+document.getElementById('inv-tab-reserve-soc').value+'%')">Apply</button>
+              </div>
+              <div class="input-row">
+                <span style="flex:1; font-size:12px; color:var(--text-muted);">Discharge Min Power Reserve (HR 114):</span>
+                <input type="number" id="inv-tab-pwr-reserve" min="4" max="100" value="4" style="width:72px;" />
+                <button class="btn" onclick="sendControl('inverter','set_battery_power_reserve',{soc:parseInt(document.getElementById('inv-tab-pwr-reserve').value)},'Set Discharge Power Reserve to '+document.getElementById('inv-tab-pwr-reserve').value+'%')">Apply</button>
+              </div>
+              <div class="ctrl-label" style="margin-top:8px;">
+                <span>Low-SoC Discharge Guard (Auto 0% Cap at ≤ Reserve)</span>
+                <span id="inv-tab-guard-lbl" style="font-family:var(--font-mono); font-size:11px; color:#34D399;">ARMED</span>
+              </div>
+              <div class="btn-row">
+                <button id="inv-tab-guard-on" class="btn" onclick="sendControl('inverter','set_low_soc_discharge_guard',{enabled:true},'Enable Low-SoC Discharge Guard')">Guard ON</button>
+                <button id="inv-tab-guard-off" class="btn" onclick="sendControl('inverter','set_low_soc_discharge_guard',{enabled:false},'Disable Low-SoC Discharge Guard')">Guard OFF</button>
+              </div>
+            </div>
+
+            <div class="ctrl-group" style="margin-bottom:0;">
+              <div class="ctrl-label"><span>Power &amp; C-Rate Limits</span></div>
+              <div class="input-row">
+                <span style="flex:1; font-size:12px; color:var(--text-muted);">DC Charge C-Rate (HR 111, 0–100, 50=0.5C):</span>
+                <input type="number" id="inv-tab-chg-limit" min="0" max="100" value="50" style="width:72px;" />
+                <button class="btn" onclick="sendControl('inverter','set_battery_charge_limit',{limit:parseInt(document.getElementById('inv-tab-chg-limit').value)},'Set DC Charge Limit to '+document.getElementById('inv-tab-chg-limit').value)">Apply</button>
+              </div>
+              <div class="input-row">
+                <span style="flex:1; font-size:12px; color:var(--text-muted);">DC Discharge C-Rate (HR 112, 0–100, 50=0.5C):</span>
+                <input type="number" id="inv-tab-dis-limit" min="0" max="100" value="50" style="width:72px;" />
+                <button class="btn" onclick="sendControl('inverter','set_battery_discharge_limit',{limit:parseInt(document.getElementById('inv-tab-dis-limit').value)},'Set DC Discharge Limit to '+document.getElementById('inv-tab-dis-limit').value)">Apply</button>
+              </div>
+              <div class="input-row">
+                <span style="flex:1; font-size:12px; color:var(--text-muted);">Active Power Output Rate % (HR 50, 0–100%):</span>
+                <input type="number" id="inv-tab-active-rate" min="0" max="100" value="100" style="width:72px;" />
+                <button class="btn" onclick="sendControl('inverter','set_active_power_rate',{rate:parseInt(document.getElementById('inv-tab-active-rate').value)},'Set Active Power Rate to '+document.getElementById('inv-tab-active-rate').value+'%')">Apply</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right: AC-Coupled Config, Pause & System Maintenance -->
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <div class="panel-title" style="color:#A78BFA;">🔧 AC-Coupled Config, Pause &amp; System</div>
+                <div class="panel-sub">Battery pause schedule, AC-coupled power/EPS settings &amp; inverter system controls</div>
+              </div>
+            </div>
+
+            <div class="ctrl-group">
+              <div class="ctrl-label">
+                <span>Battery Pause Mode &amp; Window</span>
+                <span id="inv-tab-pause-lbl" style="font-family:var(--font-mono); font-size:11px; color:var(--text-main);">DISABLED</span>
+              </div>
+              <div class="btn-row" style="margin-bottom:8px;">
+                <button id="inv-tab-pause-0" class="btn" onclick="sendControl('inverter','set_battery_pause_mode',{mode:0},'Set Battery Pause Mode: Disabled')">Disabled</button>
+                <button id="inv-tab-pause-1" class="btn" onclick="sendControl('inverter','set_battery_pause_mode',{mode:1},'Set Battery Pause Mode: Pause Charge')">Pause Chg</button>
+                <button id="inv-tab-pause-2" class="btn" onclick="sendControl('inverter','set_battery_pause_mode',{mode:2},'Set Battery Pause Mode: Pause Discharge')">Pause Dischg</button>
+                <button id="inv-tab-pause-3" class="btn" onclick="sendControl('inverter','set_battery_pause_mode',{mode:3},'Set Battery Pause Mode: Pause Both')">Pause Both</button>
+              </div>
+              <div class="input-row">
+                <span style="font-size:12px; color:var(--text-muted);">Pause Slot:</span>
+                <input type="time" id="inv-tab-pause-start" value="00:00" />
+                <span>to</span>
+                <input type="time" id="inv-tab-pause-end" value="00:00" />
+                <button class="btn primary" onclick="saveInverterPauseSlot()">Save</button>
+                <button class="btn" onclick="sendControl('inverter','reset_pause_slot',{},'Clear Battery Pause Slot')">Clear</button>
+              </div>
+            </div>
+
+            <div class="ctrl-group" id="inv-tab-ac-config-group">
+              <div class="ctrl-label">
+                <span>AC-Coupled / AIO Config (HR 311–317)</span>
+                <span id="inv-tab-ac-badge" style="font-size:11px; color:var(--text-muted);">—</span>
+              </div>
+              <div class="input-row">
+                <span style="flex:1; font-size:12px; color:var(--text-muted);">AC Charge Power Limit % (HR 313, 1–100%):</span>
+                <input type="number" id="inv-tab-ac-chg-limit" min="1" max="100" value="100" style="width:72px;" />
+                <button class="btn" onclick="sendControl('inverter','set_battery_charge_limit_ac',{limit:parseInt(document.getElementById('inv-tab-ac-chg-limit').value)},'Set AC Charge Limit to '+document.getElementById('inv-tab-ac-chg-limit').value+'%')">Apply</button>
+              </div>
+              <div class="input-row">
+                <span style="flex:1; font-size:12px; color:var(--text-muted);">AC Discharge Power Limit % (HR 314, 1–100%):</span>
+                <input type="number" id="inv-tab-ac-dis-limit" min="1" max="100" value="100" style="width:72px;" />
+                <button class="btn" onclick="sendControl('inverter','set_battery_discharge_limit_ac',{limit:parseInt(document.getElementById('inv-tab-ac-dis-limit').value)},'Set AC Discharge Limit to '+document.getElementById('inv-tab-ac-dis-limit').value+'%')">Apply</button>
+              </div>
+              <div class="ctrl-label" style="margin-top:8px;">
+                <span>Export Priority (HR 311)</span>
+                <span id="inv-tab-exp-pri-lbl" style="font-family:var(--font-mono); font-size:11px; color:var(--text-main);">—</span>
+              </div>
+              <div class="btn-row" style="margin-bottom:8px;">
+                <button id="inv-tab-exp-0" class="btn" onclick="sendControl('inverter','set_export_priority',{priority:0},'Set Export Priority: Load First')">Load First</button>
+                <button id="inv-tab-exp-1" class="btn" onclick="sendControl('inverter','set_export_priority',{priority:1},'Set Export Priority: Battery First')">Battery First</button>
+                <button id="inv-tab-exp-2" class="btn" onclick="sendControl('inverter','set_export_priority',{priority:2},'Set Export Priority: Grid First')">Grid First</button>
+              </div>
+              <div class="ctrl-label">
+                <span>Emergency Power Supply / EPS (HR 317)</span>
+                <span id="inv-tab-eps-lbl" style="font-family:var(--font-mono); font-size:11px; color:var(--text-main);">—</span>
+              </div>
+              <div class="btn-row">
+                <button id="inv-tab-eps-on" class="btn" onclick="sendControl('inverter','set_enable_eps',{enabled:true},'Enable Inverter EPS')">EPS ON</button>
+                <button id="inv-tab-eps-off" class="btn" onclick="sendControl('inverter','set_enable_eps',{enabled:false},'Disable Inverter EPS')">EPS OFF</button>
+              </div>
+            </div>
+
+            <div class="ctrl-group" style="margin-bottom:0;">
+              <div class="ctrl-label">
+                <span>Clock, RTC &amp; Inverter Maintenance</span>
+                <span id="inv-tab-rtc-lbl" style="font-family:var(--font-mono); font-size:11px; color:var(--text-main);">—</span>
+              </div>
+              <div style="font-size:11.5px; font-family:var(--font-mono); color:var(--text-muted); margin-bottom:8px;">
+                Inverter Clock: <span id="inv-tab-clock" style="color:var(--text-main);">—</span>
+              </div>
+              <div class="btn-row">
+                <button class="btn" onclick="sendControl('inverter','sync_time',{},'Sync Inverter RTC Clock')">🕒 Sync Clock</button>
+                <button id="inv-tab-rtc-on" class="btn" onclick="sendControl('inverter','set_enable_rtc',{enabled:true},'Enable Inverter RTC')">RTC ON</button>
+                <button id="inv-tab-rtc-off" class="btn" onclick="sendControl('inverter','set_enable_rtc',{enabled:false},'Disable Inverter RTC')">RTC OFF</button>
+                <button class="btn" onclick="sendControl('system','reconnect',{},'Reconnect Inverter Socket')">🔌 Reconnect</button>
+                <button class="btn danger" onclick="confirmInverterReboot()">🔄 Reboot Inverter</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bottom: All Charge & Discharge Time Slots -->
+        <div class="two-col">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <div class="panel-title" style="color:#38BDF8;">⚡ AC Charge Time Slots</div>
+                <div class="panel-sub" id="inv-tab-chg-slots-sub">All available charge windows for this inverter model</div>
+              </div>
+            </div>
+            <div id="inv-tab-chg-slots-note" style="display:none; font-size:11.5px; color:#FBBF24; background:rgba(245,158,11,0.10); border:1px solid rgba(245,158,11,0.35); border-radius:6px; padding:8px 10px; margin-bottom:10px; line-height:1.4;">
+              ℹ️ <strong>Modbus vs. givenergy.cloud:</strong> On extended-slot firmware (Gen 3 / AIO), <strong>Slot 1</strong> and <strong>Slots 3–10</strong> can be written locally via Modbus, while <strong>Charge Slot 2</strong> (<code>HR 243/244</code>) is read-only in <code>givenergy_modbus</code>. If your firmware rejects extended slot writes, configure Slots 1–9 via <strong>givenergy.cloud</strong>.
+            </div>
+            <div id="inv-tab-charge-slots-list" style="display:flex; flex-direction:column; gap:8px;"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <div class="panel-title" style="color:#38BDF8;">📤 Discharge Time Slots</div>
+                <div class="panel-sub" id="inv-tab-dis-slots-sub">All available discharge windows for this inverter model</div>
+              </div>
+            </div>
+            <div id="inv-tab-discharge-slots-list" style="display:flex; flex-direction:column; gap:8px;"></div>
           </div>
         </div>
       </section>
@@ -2150,7 +2382,7 @@
         </div>
 
         <div class="ctrl-group">
-          <div class="ctrl-label"><span>SoC Targets &amp; Power Limits (%)</span></div>
+          <div class="ctrl-label"><span>SoC Targets (%)</span></div>
           <div class="input-row">
             <span style="flex:1; font-size:12px; color:var(--text-muted);">Charge Target SoC:</span>
             <input type="number" id="inp-target-soc" min="4" max="100" value="100" style="width:68px;" />
@@ -2161,33 +2393,23 @@
             <input type="number" id="inp-reserve-soc" min="4" max="100" value="4" style="width:68px;" />
             <button class="btn primary" onclick="sendControl('inverter','set_battery_soc_reserve',{soc:parseInt(document.getElementById('inp-reserve-soc').value)},'Set Reserve SoC to '+document.getElementById('inp-reserve-soc').value+'%')">Apply</button>
           </div>
-          <div class="input-row">
-            <span style="flex:1; font-size:12px; color:var(--text-muted);">Max Charge Rate %:</span>
-            <input type="number" id="inp-chg-limit" min="0" max="50" value="50" style="width:68px;" />
-            <button class="btn" onclick="sendControl('inverter','set_battery_charge_limit',{limit:parseInt(document.getElementById('inp-chg-limit').value)},'Set Charge Limit to '+document.getElementById('inp-chg-limit').value+'%')">Apply</button>
+          <div class="ctrl-label" style="margin-top:8px;">
+            <span>Low-SoC Discharge Guard</span>
+            <span id="ctrl-inv-guard-lbl" style="font-family:var(--font-mono); font-size:11px; color:#34D399;">ARMED</span>
           </div>
-          <div class="input-row">
-            <span style="flex:1; font-size:12px; color:var(--text-muted);">Max Dischg Rate %:</span>
-            <input type="number" id="inp-dis-limit" min="0" max="50" value="50" style="width:68px;" />
-            <button class="btn" onclick="sendControl('inverter','set_battery_discharge_limit',{limit:parseInt(document.getElementById('inp-dis-limit').value)},'Set Discharge Limit to '+document.getElementById('inp-dis-limit').value+'%')">Apply</button>
+          <div class="btn-row">
+            <button id="btn-inv-guard-on" class="btn" onclick="sendControl('inverter','set_low_soc_discharge_guard',{enabled:true},'Enable Low-SoC Discharge Guard')">Guard ON</button>
+            <button id="btn-inv-guard-off" class="btn" onclick="sendControl('inverter','set_low_soc_discharge_guard',{enabled:false},'Disable Low-SoC Discharge Guard')">Guard OFF</button>
           </div>
         </div>
 
         <div class="ctrl-group">
-          <div class="ctrl-label"><span>Time Slot 1 Windows (HH:MM)</span></div>
-          <div style="font-size:11.5px; color:var(--text-muted); margin-bottom:4px;">AC Charge Slot 1:</div>
-          <div class="input-row" style="margin-bottom:8px;">
-            <input type="time" id="inp-chg1-start" value="00:30" />
-            <span>to</span>
-            <input type="time" id="inp-chg1-end" value="04:30" />
-            <button class="btn primary" onclick="applySlot('set_charge_slot_1','inp-chg1-start','inp-chg1-end','Charge Slot 1')">Save</button>
+          <div class="ctrl-label">
+            <span>Active AC Charge Slots (HH:MM)</span>
+            <button class="btn" style="padding:2px 7px; font-size:10.5px;" onclick="switchTab('inverter', document.getElementById('tab-btn-inverter'))">All Slots →</button>
           </div>
-          <div style="font-size:11.5px; color:var(--text-muted); margin-bottom:4px;">Discharge Slot 1:</div>
-          <div class="input-row">
-            <input type="time" id="inp-dis1-start" value="00:00" />
-            <span>to</span>
-            <input type="time" id="inp-dis1-end" value="00:00" />
-            <button class="btn primary" onclick="applySlot('set_discharge_slot_1','inp-dis1-start','inp-dis1-end','Discharge Slot 1')">Save</button>
+          <div id="ctrl-active-charge-slots" style="display:flex; flex-direction:column; gap:6px;">
+            <div style="font-size:11.5px; color:var(--text-muted);">Waiting for inverter…</div>
           </div>
         </div>
 
@@ -2533,6 +2755,8 @@
       if (btnPgoOn && btnPgoOff) {
         btnPgoOn.className = 'btn' + (pgoEnabled ? ' primary' : '');
         btnPgoOff.className = 'btn' + (!pgoEnabled ? ' amber' : '');
+        btnPgoOn.disabled = pgoEnabled;
+        btnPgoOff.disabled = !pgoEnabled;
       }
 
       const evcMode = evc.charging_mode || 'Grid';
@@ -2553,8 +2777,8 @@
         const cBtn = document.getElementById('btn-ctrl-evc-' + m);
         const tBtn = document.getElementById('tab-evc-mode-' + m);
         const activeCls = m === 'solar' ? ' success' : (m === 'hybrid' ? ' amber' : ' primary');
-        if (cBtn) cBtn.className = 'btn' + (isActive ? activeCls : '');
-        if (tBtn) tBtn.className = 'btn' + (isActive ? activeCls : '');
+        if (cBtn) { cBtn.className = 'btn' + (isActive ? activeCls : ''); cBtn.disabled = isActive; }
+        if (tBtn) { tBtn.className = 'btn' + (isActive ? activeCls : ''); tBtn.disabled = isActive; }
       });
 
       const maxBatW = Number(evc.max_battery_discharge_w ?? 0);
@@ -2604,14 +2828,14 @@
       ].forEach(([onId, offId]) => {
         const onBtn = document.getElementById(onId);
         const offBtn = document.getElementById(offId);
-        if (onBtn) onBtn.className = 'btn' + (schedEnabled ? ' success' : '');
-        if (offBtn) offBtn.className = 'btn' + (!schedEnabled ? ' primary' : '');
+        if (onBtn) { onBtn.className = 'btn' + (schedEnabled ? ' success' : ''); onBtn.disabled = schedEnabled; }
+        if (offBtn) { offBtn.className = 'btn' + (!schedEnabled ? ' primary' : ''); offBtn.disabled = !schedEnabled; }
       });
 
       const btnTariff = document.getElementById('btn-evc-sched-tariff');
       const btnCustom = document.getElementById('btn-evc-sched-custom');
-      if (btnTariff) btnTariff.className = 'btn' + (schedUseTariff ? ' primary' : '');
-      if (btnCustom) btnCustom.className = 'btn' + (!schedUseTariff ? ' primary' : '');
+      if (btnTariff) { btnTariff.className = 'btn' + (schedUseTariff ? ' primary' : ''); btnTariff.disabled = schedUseTariff; }
+      if (btnCustom) { btnCustom.className = 'btn' + (!schedUseTariff ? ' primary' : ''); btnCustom.disabled = !schedUseTariff; }
 
       const schedStartEl = document.getElementById('evc-sched-start');
       const schedEndEl = document.getElementById('evc-sched-end');
@@ -2634,9 +2858,9 @@
       const isEcoMode = !!inv.connected && invModeSummary.startsWith('Eco');
       const isTimedDisMode = !!inv.connected && invModeSummary.startsWith('Timed Discharge');
       const isTimedExpMode = !!inv.connected && invModeSummary.startsWith('Timed Export');
-      if (btnInvEco) btnInvEco.className = 'btn' + (isEcoMode ? ' success' : '');
-      if (btnInvTimedDis) btnInvTimedDis.className = 'btn' + (isTimedDisMode ? ' primary' : '');
-      if (btnInvTimedExp) btnInvTimedExp.className = 'btn' + (isTimedExpMode ? ' amber' : '');
+      if (btnInvEco) { btnInvEco.className = 'btn' + (isEcoMode ? ' success' : ''); btnInvEco.disabled = isEcoMode; }
+      if (btnInvTimedDis) { btnInvTimedDis.className = 'btn' + (isTimedDisMode ? ' primary' : ''); btnInvTimedDis.disabled = isTimedDisMode; }
+      if (btnInvTimedExp) { btnInvTimedExp.className = 'btn' + (isTimedExpMode ? ' amber' : ''); btnInvTimedExp.disabled = isTimedExpMode; }
 
       // Scheduled AC Charge & Discharge active state indicators
       const chgOn = !!inv.enable_charge;
@@ -2655,23 +2879,45 @@
       if (btnChgOn && btnChgOff) {
         btnChgOn.className = 'btn' + (chgOn ? ' primary' : '');
         btnChgOff.className = 'btn' + (!chgOn && inv.connected ? ' danger' : '');
+        btnChgOn.disabled = !!inv.connected && chgOn;
+        btnChgOff.disabled = !!inv.connected && !chgOn;
       }
       if (btnDisOn && btnDisOff) {
         btnDisOn.className = 'btn' + (disOn ? ' amber' : '');
         btnDisOff.className = 'btn' + (!disOn && inv.connected ? ' danger' : '');
+        btnDisOn.disabled = !!inv.connected && disOn;
+        btnDisOff.disabled = !!inv.connected && !disOn;
       }
+
+      const guardEnabled = inv.low_soc_discharge_guard_enabled !== false;
+      const guardActive = !!inv.low_soc_discharge_guard_active;
+      const resPct = inv.battery_soc_reserve ?? 4;
+      const guardText = !guardEnabled ? 'DISABLED' : (guardActive ? `GUARDING (0% @ ≤${resPct}%)` : `ARMED (≤${resPct}%)`);
+      const guardColor = !guardEnabled ? 'var(--text-muted)' : (guardActive ? '#FBBF24' : '#34D399');
+      ['ctrl-inv-guard-lbl', 'inv-tab-guard-lbl'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.textContent = guardText; el.style.color = guardColor; }
+      });
+      [
+        ['btn-inv-guard-on', 'btn-inv-guard-off'],
+        ['inv-tab-guard-on', 'inv-tab-guard-off'],
+      ].forEach(([onId, offId]) => {
+        const gOn = document.getElementById(onId);
+        const gOff = document.getElementById(offId);
+        if (gOn && gOff) {
+          gOn.className = 'btn' + (guardEnabled ? (guardActive ? ' amber' : ' success') : '');
+          gOff.className = 'btn' + (!guardEnabled ? ' danger' : '');
+          gOn.disabled = guardEnabled;
+          gOff.disabled = !guardEnabled;
+        }
+      });
 
       if (!controlsInitialized && inv.connected) {
         controlsInitialized = true;
         document.getElementById('inp-target-soc').value = inv.charge_target_soc || 100;
         document.getElementById('inp-reserve-soc').value = inv.battery_soc_reserve || 4;
-        document.getElementById('inp-chg-limit').value = inv.battery_charge_limit || 50;
-        document.getElementById('inp-dis-limit').value = inv.battery_discharge_limit || 50;
-        if (inv.charge_slot_1_start) document.getElementById('inp-chg1-start').value = inv.charge_slot_1_start;
-        if (inv.charge_slot_1_end) document.getElementById('inp-chg1-end').value = inv.charge_slot_1_end;
-        if (inv.discharge_slot_1_start) document.getElementById('inp-dis1-start').value = inv.discharge_slot_1_start;
-        if (inv.discharge_slot_1_end) document.getElementById('inp-dis1-end').value = inv.discharge_slot_1_end;
       }
+      updateSidebarChargeSlots(inv);
       const ampsSlider = document.getElementById('evc-amps-slider');
       const isDynamicSolar = evcMode === 'Solar' || evcMode === 'Hybrid';
       if (ampsSlider) {
@@ -2695,7 +2941,8 @@
         ).join('');
       }
 
-      // Update BMS, EV Charger & Detail tables
+      // Update Inverter, BMS, EV Charger & Detail tables
+      updateInverterTab(inv);
       updateBmsTab(bats, inv);
       updateEvcTab(evc, inv);
       updateDetailsTab(inv, bat, evc, sys);
@@ -2727,6 +2974,12 @@
       return { text: `${shortT} (${driftTxt})`, color };
     }
 
+    function _parseLocalTimestamp(tsStr) {
+      if (!tsStr) return null;
+      const d = new Date(tsStr.replace(' ', 'T'));
+      return isNaN(d.getTime()) ? null : d;
+    }
+
     function updateClockSyncReadout(inv, evc, data) {
       const now = new Date();
       const pad2 = n => String(n).padStart(2, '0');
@@ -2734,11 +2987,13 @@
       const elLoc = document.getElementById('clk-local');
       if (elLoc) elLoc.textContent = localStr.slice(11);
 
-      const invRes = _formatClockDrift(inv?.system_time, now);
+      const invRef = _parseLocalTimestamp(inv?.system_time_polled_at) || _parseLocalTimestamp(inv?.last_updated) || now;
+      const invRes = _formatClockDrift(inv?.system_time, invRef);
       const elInv = document.getElementById('clk-inv');
       if (elInv) { elInv.textContent = invRes.text; elInv.style.color = invRes.color; }
 
-      const evcRes = _formatClockDrift(evc?.system_time, now);
+      const evcRef = _parseLocalTimestamp(evc?.last_updated) || now;
+      const evcRes = _formatClockDrift(evc?.system_time, evcRef);
       const elEvc = document.getElementById('clk-evc');
       if (elEvc) { elEvc.textContent = evcRes.text; elEvc.style.color = evcRes.color; }
     }
@@ -2871,6 +3126,259 @@
       const s = document.getElementById(startId).value || '00:00';
       const e = document.getElementById(endId).value || '00:00';
       sendControl('inverter', action, { start: s, end: e }, `Set ${label} to ${s}–${e}`);
+    }
+
+    function saveSidebarChargeSlot(idx) {
+      const s = document.getElementById(`ctrl-chg-${idx}-start`)?.value || '00:00';
+      const e = document.getElementById(`ctrl-chg-${idx}-end`)?.value || '00:00';
+      sendControl('inverter', 'set_charge_slot', { slot: idx, start: s, end: e }, `Set Charge Slot ${idx} to ${s}–${e}`);
+    }
+
+    function updateSidebarChargeSlots(inv) {
+      const box = document.getElementById('ctrl-active-charge-slots');
+      if (!box || !inv) return;
+      const allSlots = Array.isArray(inv.charge_slots) && inv.charge_slots.length
+        ? inv.charge_slots
+        : [{ slot: 1, start: inv.charge_slot_1_start || '00:00', end: inv.charge_slot_1_end || '00:00' }];
+      const active = allSlots.filter(s => s.start && s.end && !(s.start === '00:00' && s.end === '00:00') && s.start !== s.end);
+      const key = active.length ? active.map(s => s.slot).join(',') : 'none';
+      if (box.dataset.slotsKey !== key) {
+        box.dataset.slotsKey = key;
+        if (!active.length) {
+          box.innerHTML = `<div style="font-size:11.5px; color:var(--text-muted);">No active AC charge slots (00:00–00:00). Use <strong>All Slots →</strong> to configure.</div>`;
+        } else {
+          box.innerHTML = active.map(s => `
+            <div style="font-size:11.5px; color:var(--text-muted);">AC Charge Slot ${s.slot}:</div>
+            <div class="input-row" style="margin-bottom:2px;">
+              <input type="time" id="ctrl-chg-${s.slot}-start" value="${s.start}" />
+              <span>to</span>
+              <input type="time" id="ctrl-chg-${s.slot}-end" value="${s.end}" />
+              <button class="btn primary" onclick="saveSidebarChargeSlot(${s.slot})">Save</button>
+            </div>
+          `).join('');
+        }
+      } else {
+        active.forEach(s => {
+          const se = document.getElementById(`ctrl-chg-${s.slot}-start`);
+          const ee = document.getElementById(`ctrl-chg-${s.slot}-end`);
+          if (se && document.activeElement !== se) se.value = s.start;
+          if (ee && document.activeElement !== ee) ee.value = s.end;
+        });
+      }
+    }
+
+    function saveInverterSlot(kind, idx) {
+      const s = document.getElementById(`inv-slot-${kind}-${idx}-start`)?.value || '00:00';
+      const e = document.getElementById(`inv-slot-${kind}-${idx}-end`)?.value || '00:00';
+      const action = kind === 'charge' ? 'set_charge_slot' : 'set_discharge_slot';
+      const label = kind === 'charge' ? `Charge Slot ${idx}` : `Discharge Slot ${idx}`;
+      sendControl('inverter', action, { slot: idx, start: s, end: e }, `Set ${label} to ${s}–${e}`);
+    }
+
+    function resetInverterSlot(kind, idx) {
+      const action = kind === 'charge' ? 'reset_charge_slot' : 'reset_discharge_slot';
+      const label = kind === 'charge' ? `Charge Slot ${idx}` : `Discharge Slot ${idx}`;
+      sendControl('inverter', action, { slot: idx }, `Clear ${label}`);
+    }
+
+    function saveInverterPauseSlot() {
+      const s = document.getElementById('inv-tab-pause-start')?.value || '00:00';
+      const e = document.getElementById('inv-tab-pause-end')?.value || '00:00';
+      sendControl('inverter', 'set_pause_slot', { start: s, end: e }, `Set Battery Pause Slot to ${s}–${e}`);
+    }
+
+    function confirmInverterReboot() {
+      if (confirm('Reboot the inverter? This will briefly interrupt inverter telemetry and control.')) {
+        sendControl('inverter', 'set_inverter_reboot', {}, 'Reboot Inverter');
+      }
+    }
+
+    function _renderSlotRows(containerId, kind, slots, numSlots) {
+      const container = document.getElementById(containerId);
+      if (!container) return;
+      const count = Math.max(2, Number(numSlots || (slots && slots.length) || 2));
+      const slotByIdx = {};
+      if (Array.isArray(slots)) {
+        slots.forEach(s => { slotByIdx[s.slot] = s; });
+      }
+      if (container.dataset.slotCount !== String(count)) {
+        container.dataset.slotCount = String(count);
+        let html = '';
+        for (let i = 1; i <= count; i++) {
+          const s = slotByIdx[i] || { start: '00:00', end: '00:00', target_soc: null };
+          const isChg2ReadOnly = (kind === 'charge' && count > 2 && i === 2);
+          const socBadge = s.target_soc !== null && s.target_soc !== undefined
+            ? `<span style="font-size:11px; color:var(--text-muted); font-family:var(--font-mono);" id="inv-slot-${kind}-${i}-soc">SoC ${s.target_soc}%</span>`
+            : `<span style="font-size:11px; color:var(--text-muted); font-family:var(--font-mono);" id="inv-slot-${kind}-${i}-soc"></span>`;
+          const actionsHtml = isChg2ReadOnly
+            ? `<span style="font-size:11px; color:#FBBF24;" title="HR 243/244 is read-only via givenergy_modbus on Gen 3; use givenergy.cloud">givenergy.cloud only</span>`
+            : `<button class="btn primary" onclick="saveInverterSlot('${kind}', ${i})">Save</button>
+              <button class="btn" onclick="resetInverterSlot('${kind}', ${i})">Clear</button>`;
+          html += `
+            <div class="input-row" style="background:rgba(15,23,42,0.45); border:1px solid var(--border); border-radius:8px; padding:6px 10px;">
+              <span style="min-width:56px; font-size:12px; font-weight:600; color:var(--text-main);">Slot ${i}</span>
+              <input type="time" id="inv-slot-${kind}-${i}-start" value="${s.start || '00:00'}" ${isChg2ReadOnly ? 'disabled' : ''} />
+              <span style="color:var(--text-muted);">to</span>
+              <input type="time" id="inv-slot-${kind}-${i}-end" value="${s.end || '00:00'}" ${isChg2ReadOnly ? 'disabled' : ''} />
+              ${socBadge}
+              <span style="flex:1;"></span>
+              ${actionsHtml}
+            </div>`;
+        }
+        container.innerHTML = html;
+      } else {
+        for (let i = 1; i <= count; i++) {
+          const s = slotByIdx[i] || { start: '00:00', end: '00:00', target_soc: null };
+          const startEl = document.getElementById(`inv-slot-${kind}-${i}-start`);
+          const endEl = document.getElementById(`inv-slot-${kind}-${i}-end`);
+          const socEl = document.getElementById(`inv-slot-${kind}-${i}-soc`);
+          if (startEl && document.activeElement !== startEl && s.start) startEl.value = s.start;
+          if (endEl && document.activeElement !== endEl && s.end) endEl.value = s.end;
+          if (socEl) {
+            socEl.textContent = (s.target_soc !== null && s.target_soc !== undefined) ? `SoC ${s.target_soc}%` : '';
+          }
+        }
+      }
+    }
+
+    function updateInverterTab(inv) {
+      if (!inv) return;
+      const connected = !!inv.connected;
+      const modelEl = document.getElementById('inv-tab-model');
+      if (modelEl) modelEl.textContent = inv.model_name || '—';
+      const snEl = document.getElementById('inv-tab-serial');
+      if (snEl) snEl.textContent = `S/N: ${inv.serial_number || '—'} • FW ${inv.firmware_version || '—'}`;
+
+      const modeSummary = inv.operating_mode_summary || '—';
+      const modeEl = document.getElementById('inv-tab-mode');
+      if (modeEl) modeEl.textContent = modeSummary;
+      const statusEl = document.getElementById('inv-tab-status');
+      if (statusEl) statusEl.textContent = `Status: ${inv.status || '—'} • SoC ${inv.battery_soc ?? 0}%`;
+
+      const chgOn = !!inv.enable_charge;
+      const disOn = !!inv.enable_discharge;
+      const tgtOn = !!inv.enable_charge_target;
+      const schedEl = document.getElementById('inv-tab-sched');
+      if (schedEl) schedEl.textContent = connected ? `Chg: ${chgOn ? 'ON' : 'OFF'} | Dis: ${disOn ? 'ON' : 'OFF'}` : '—';
+      const numChg = inv.num_charge_slots || 2;
+      const numDis = inv.num_discharge_slots || 2;
+      const slotsCapEl = document.getElementById('inv-tab-slots-cap');
+      if (slotsCapEl) slotsCapEl.textContent = `${numChg} Charge / ${numDis} Discharge Slots`;
+
+      const rateEl = document.getElementById('inv-tab-power-rate');
+      if (rateEl) rateEl.textContent = `${inv.active_power_rate ?? 100} %`;
+      const dcLimEl = document.getElementById('inv-tab-dc-limits');
+      if (dcLimEl) dcLimEl.textContent = `DC Chg/Dis: ${inv.battery_charge_limit ?? 50} / ${inv.battery_discharge_limit ?? 50}`;
+
+      const modeLbl = document.getElementById('inv-tab-mode-lbl');
+      if (modeLbl) modeLbl.textContent = modeSummary;
+      const bEco = document.getElementById('inv-tab-btn-eco');
+      const bTDis = document.getElementById('inv-tab-btn-timed-dis');
+      const bTExp = document.getElementById('inv-tab-btn-timed-exp');
+      const isEco = connected && modeSummary.startsWith('Eco');
+      const isTDis = connected && modeSummary.startsWith('Timed Discharge');
+      const isTExp = connected && modeSummary.startsWith('Timed Export');
+      if (bEco) { bEco.className = 'btn' + (isEco ? ' success' : ''); bEco.disabled = isEco; }
+      if (bTDis) { bTDis.className = 'btn' + (isTDis ? ' primary' : ''); bTDis.disabled = isTDis; }
+      if (bTExp) { bTExp.className = 'btn' + (isTExp ? ' amber' : ''); bTExp.disabled = isTExp; }
+
+      const enLbl = document.getElementById('inv-tab-enables-lbl');
+      if (enLbl) enLbl.textContent = connected ? `Chg:${chgOn ? 'ON' : 'OFF'} | Dis:${disOn ? 'ON' : 'OFF'} | Target:${tgtOn ? 'ON' : 'OFF'}` : '—';
+      const cOn = document.getElementById('inv-tab-chg-on'), cOff = document.getElementById('inv-tab-chg-off');
+      const dOn = document.getElementById('inv-tab-dis-on'), dOff = document.getElementById('inv-tab-dis-off');
+      const tOn = document.getElementById('inv-tab-tgt-on'), tOff = document.getElementById('inv-tab-tgt-off');
+      if (cOn && cOff) {
+        cOn.className = 'btn' + (chgOn ? ' primary' : ''); cOff.className = 'btn' + (!chgOn && connected ? ' danger' : '');
+        cOn.disabled = connected && chgOn; cOff.disabled = connected && !chgOn;
+      }
+      if (dOn && dOff) {
+        dOn.className = 'btn' + (disOn ? ' amber' : ''); dOff.className = 'btn' + (!disOn && connected ? ' danger' : '');
+        dOn.disabled = connected && disOn; dOff.disabled = connected && !disOn;
+      }
+      if (tOn && tOff) {
+        tOn.className = 'btn' + (tgtOn ? ' primary' : ''); tOff.className = 'btn' + (!tgtOn && connected ? ' danger' : '');
+        tOn.disabled = connected && tgtOn; tOff.disabled = connected && !tgtOn;
+      }
+
+      const syncInput = (id, val) => {
+        const el = document.getElementById(id);
+        if (el && document.activeElement !== el && val !== undefined && val !== null) el.value = val;
+      };
+      if (connected) {
+        syncInput('inv-tab-target-soc', inv.charge_target_soc ?? 100);
+        syncInput('inv-tab-reserve-soc', inv.battery_soc_reserve ?? 4);
+        syncInput('inv-tab-pwr-reserve', inv.battery_discharge_min_power_reserve ?? 4);
+        syncInput('inv-tab-chg-limit', inv.battery_charge_limit ?? 50);
+        syncInput('inv-tab-dis-limit', inv.battery_discharge_limit ?? 50);
+        syncInput('inv-tab-active-rate', inv.active_power_rate ?? 100);
+        syncInput('inv-tab-ac-chg-limit', inv.battery_charge_limit_ac ?? 100);
+        syncInput('inv-tab-ac-dis-limit', inv.battery_discharge_limit_ac ?? 100);
+        syncInput('inv-tab-pause-start', inv.battery_pause_slot_start || '00:00');
+        syncInput('inv-tab-pause-end', inv.battery_pause_slot_end || '00:00');
+      }
+
+      const pauseMode = Number(inv.battery_pause_mode ?? 0);
+      const pauseLbl = document.getElementById('inv-tab-pause-lbl');
+      if (pauseLbl) pauseLbl.textContent = inv.battery_pause_mode_label || 'DISABLED';
+      for (let m = 0; m <= 3; m++) {
+        const pb = document.getElementById(`inv-tab-pause-${m}`);
+        if (pb) {
+          const isPauseActive = connected && pauseMode === m;
+          pb.className = 'btn' + (isPauseActive ? ' primary' : '');
+          pb.disabled = isPauseActive;
+        }
+      }
+
+      const hasAcCfg = !!inv.has_ac_config_block;
+      const acBadge = document.getElementById('inv-tab-ac-badge');
+      if (acBadge) {
+        acBadge.textContent = hasAcCfg ? 'Supported (AC/AIO)' : 'Not supported on this model';
+        acBadge.style.color = hasAcCfg ? '#34D399' : 'var(--text-muted)';
+      }
+      const expPri = Number(inv.export_priority ?? 0);
+      const expLbl = document.getElementById('inv-tab-exp-pri-lbl');
+      if (expLbl) expLbl.textContent = inv.export_priority_label || 'LOAD_FIRST';
+      for (let p = 0; p <= 2; p++) {
+        const eb = document.getElementById(`inv-tab-exp-${p}`);
+        if (eb) {
+          const isExpActive = connected && hasAcCfg && expPri === p;
+          eb.className = 'btn' + (isExpActive ? ' primary' : '');
+          eb.disabled = !connected || !hasAcCfg || expPri === p;
+        }
+      }
+      const epsOn = !!inv.enable_eps;
+      const epsLbl = document.getElementById('inv-tab-eps-lbl');
+      if (epsLbl) epsLbl.textContent = connected ? (epsOn ? 'ENABLED' : 'DISABLED') : '—';
+      const eOn = document.getElementById('inv-tab-eps-on'), eOff = document.getElementById('inv-tab-eps-off');
+      if (eOn && eOff) {
+        eOn.className = 'btn' + (connected && hasAcCfg && epsOn ? ' primary' : '');
+        eOff.className = 'btn' + (connected && hasAcCfg && !epsOn ? ' danger' : '');
+        eOn.disabled = !connected || !hasAcCfg || epsOn;
+        eOff.disabled = !connected || !hasAcCfg || !epsOn;
+      }
+
+      const rtcOn = !!inv.enable_rtc;
+      const rtcLbl = document.getElementById('inv-tab-rtc-lbl');
+      if (rtcLbl) rtcLbl.textContent = connected ? `RTC: ${rtcOn ? 'ON' : 'OFF'}` : '—';
+      const rOn = document.getElementById('inv-tab-rtc-on'), rOff = document.getElementById('inv-tab-rtc-off');
+      if (rOn && rOff) {
+        rOn.className = 'btn' + (connected && rtcOn ? ' primary' : '');
+        rOff.className = 'btn' + (connected && !rtcOn ? ' danger' : '');
+        rOn.disabled = connected && rtcOn;
+        rOff.disabled = connected && !rtcOn;
+      }
+      const clkEl = document.getElementById('inv-tab-clock');
+      if (clkEl) clkEl.textContent = inv.system_time || '—';
+
+      const chgSub = document.getElementById('inv-tab-chg-slots-sub');
+      if (chgSub) chgSub.textContent = `Showing ${numChg} AC charge slots supported by ${inv.model_name || 'this inverter'}`;
+      const disSub = document.getElementById('inv-tab-dis-slots-sub');
+      if (disSub) disSub.textContent = `Showing ${numDis} discharge slots supported by ${inv.model_name || 'this inverter'}`;
+      const chgNote = document.getElementById('inv-tab-chg-slots-note');
+      if (chgNote) chgNote.style.display = numChg > 2 ? 'block' : 'none';
+
+      _renderSlotRows('inv-tab-charge-slots-list', 'charge', inv.charge_slots, numChg);
+      _renderSlotRows('inv-tab-discharge-slots-list', 'discharge', inv.discharge_slots, numDis);
     }
 
     async function sendControl(target, action, params, description) {
@@ -3974,7 +4482,7 @@
           piRows.push(['CPU Temperature', `${sys.cpu_temp_c} °C`]);
         }
         if (Array.isArray(sys.load_avg) && sys.load_avg.length > 0) {
-          piRows.push(['CPU Load Average (1m / 5m / 15m)', sys.load_avg.join(' / ')]);
+          piRows.push(['CPU Load Average (1m / 5m / 15m)', sys.load_avg.map(x => Number(x).toFixed(2)).join(' / ')]);
         }
         piRows.push(
           ['System RAM Usage', `${sys.mem_used_mb} MB / ${sys.mem_total_mb} MB (${sys.mem_pct}%)`],
@@ -5606,8 +6114,8 @@
               <td style="color:#34D399;">${sym}${Number(d.export_income_gbp).toFixed(2)}</td>
               <td style="color:#38BDF8;">${sym}${evCost.toFixed(2)}</td>
               <td style="color:#FCA5A5;">${sym}${houseCost.toFixed(2)}</td>
-              <td style="font-weight:600;">${fmtMoney(rNet)}</td>
               <td style="color:#FBBF24;">${sym}${Number(d.savings_gbp).toFixed(2)}</td>
+              <td style="font-weight:600;">${fmtMoney(rNet)}</td>
               <td style="font-weight:600;">${fmtMoney(rCum)}</td>
             </tr>
           `;
@@ -5624,8 +6132,8 @@
               <td style="color:#34D399;">${sym}${Number(tot.export_income_gbp || 0).toFixed(2)}</td>
               <td style="color:#38BDF8;">${sym}${Number(tot.ev_cost_gbp || 0).toFixed(2)}</td>
               <td style="color:#FCA5A5;">${sym}${Number(tot.house_cost_gbp ?? tot.import_cost_gbp ?? 0).toFixed(2)}</td>
-              <td>${fmtMoney(netVal)}</td>
               <td style="color:#FBBF24;">${sym}${Number(tot.savings_gbp || 0).toFixed(2)}</td>
+              <td>${fmtMoney(netVal)}</td>
               <td>${fmtMoney(cum)}</td>
             </tr>
           `;

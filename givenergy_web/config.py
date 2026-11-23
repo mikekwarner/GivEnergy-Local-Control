@@ -33,6 +33,7 @@ class PropertyConfig:
     evc_schedule_use_tariff: bool = True
     evc_schedule_start: str = "00:00"
     evc_schedule_end: str = "06:00"
+    low_soc_discharge_guard: bool = True
 
 
 def _env_bool(name: str, default: bool) -> bool:

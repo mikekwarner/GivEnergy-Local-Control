@@ -13,9 +13,11 @@ from typing import Any, Callable
 
 from givenergy_modbus.client import commands
 from givenergy_modbus.client.client import Client as GivInverterClient
+from givenergy_modbus.client.commands import BatteryPauseMode, ExportPriority
 from givenergy_modbus.exceptions import PlantTopologyMismatch, RefreshFailed, RefreshPartiallySucceeded
 from givenergy_modbus.model import TimeSlot
 from givenergy_modbus.model.inverter import Model
+from givenergy_modbus.model.manifest import has_capability
 from givenergy_modbus.model.plant import PlantCapabilities
 from pymodbus.client import ModbusTcpClient
 
@@ -88,6 +90,9 @@ def serialize_snapshot(snap: PlantSnapshot, cfg: PropertyConfig | None = None) -
     inv_dict = asdict(inv)
     inv_dict["last_updated"] = inv.last_updated.strftime("%Y-%m-%d %H:%M:%S") if inv.last_updated else None
     inv_dict["system_time"] = inv.system_time.strftime("%Y-%m-%d %H:%M:%S") if inv.system_time else None
+    inv_dict["system_time_polled_at"] = (
+        inv.system_time_polled_at.strftime("%Y-%m-%d %H:%M:%S") if inv.system_time_polled_at else None
+    )
     inv_dict["charge_slot_1_start"] = inv.charge_slot_1_start.strftime("%H:%M")
     inv_dict["charge_slot_1_end"] = inv.charge_slot_1_end.strftime("%H:%M")
     inv_dict["charge_slot_2_start"] = inv.charge_slot_2_start.strftime("%H:%M")
@@ -96,6 +101,8 @@ def serialize_snapshot(snap: PlantSnapshot, cfg: PropertyConfig | None = None) -
     inv_dict["discharge_slot_1_end"] = inv.discharge_slot_1_end.strftime("%H:%M")
     inv_dict["discharge_slot_2_start"] = inv.discharge_slot_2_start.strftime("%H:%M")
     inv_dict["discharge_slot_2_end"] = inv.discharge_slot_2_end.strftime("%H:%M")
+    inv_dict["battery_pause_slot_start"] = inv.battery_pause_slot_start.strftime("%H:%M")
+    inv_dict["battery_pause_slot_end"] = inv.battery_pause_slot_end.strftime("%H:%M")
     inv_dict["operating_mode_summary"] = inv.operating_mode_summary
 
     bat_dict = _serialize_battery(bat)
@@ -175,6 +182,9 @@ class AsyncPlantPoller:
         self._evc_schedule_handled_window: str | None = None
         self._saved_inv_discharge_limit: int | None = None
         self._evc_last_logged_cap_pct: int | None = None
+        self._low_soc_guard_active: bool = False
+        self._low_soc_last_logged_active: bool | None = None
+        self.snapshot.inverter.low_soc_discharge_guard_enabled = bool(self.config.low_soc_discharge_guard)
         self._sync_evc_config_to_snapshot()
         self.events: list[dict[str, str]] = []
         self._running = False
@@ -366,6 +376,17 @@ class AsyncPlantPoller:
                     self.log_event("info", cmd.description)
                     continue
 
+                if cmd.target == "inverter" and cmd.action == "set_low_soc_discharge_guard":
+                    enabled = bool(cmd.params.get("enabled", True))
+                    self.config.low_soc_discharge_guard = enabled
+                    self.snapshot.inverter.low_soc_discharge_guard_enabled = enabled
+                    if not enabled:
+                        self._low_soc_guard_active = False
+                        self.snapshot.inverter.low_soc_discharge_guard_active = False
+                    self._save_config_safe()
+                    self.log_event("info", f"Battery Guard: Low-SoC Discharge Guard {'enabled' if enabled else 'disabled'}")
+                    continue
+
                 if cmd.target == "inverter":
                     inv_client, inv_detected = await self._ensure_inverter_connected(inv_client, inv_detected)
                     if inv_client and inv_detected:
@@ -481,8 +502,9 @@ class AsyncPlantPoller:
             if load_config:
                 try:
                     await inv_client.load_config(timeout=2.5, retries=2)
+                    self.snapshot.inverter.system_time_polled_at = datetime.now()
                 except RefreshPartiallySucceeded:
-                    pass
+                    self.snapshot.inverter.system_time_polled_at = datetime.now()
             try:
                 await inv_client.refresh(timeout=2.5, retries=2)
             except RefreshPartiallySucceeded:
@@ -649,6 +671,59 @@ class AsyncPlantPoller:
             t_inv.discharge_slot_2_start = ds2.start
             t_inv.discharge_slot_2_end = ds2.end
 
+        slot_map = getattr(inv, "slot_map", None)
+        num_chg_slots = len(slot_map.charge_slots) if slot_map is not None else 2
+        num_dis_slots = len(slot_map.discharge_slots) if slot_map is not None else 2
+        t_inv.num_charge_slots = num_chg_slots
+        t_inv.num_discharge_slots = num_dis_slots
+
+        inv_model = getattr(inv, "model", None)
+        t_inv.has_ac_config_block = bool(inv_model is not None and has_capability("has_ac_config_block", inv_model))
+        t_inv.is_three_phase = bool(inv_model is not None and has_capability("is_three_phase", inv_model))
+
+        t_inv.charge_slots = []
+        for idx in range(1, num_chg_slots + 1):
+            if idx == 2 and num_chg_slots > 2:
+                slot_obj = getattr(inv, "charge_slot_2_x", None) or getattr(inv, "charge_slot_2", None)
+            else:
+                slot_obj = getattr(inv, f"charge_slot_{idx}", None)
+            target_soc = getattr(inv, f"charge_target_soc_{idx}", None)
+            t_inv.charge_slots.append({
+                "slot": idx,
+                "start": slot_obj.start.strftime("%H:%M") if slot_obj is not None else "00:00",
+                "end": slot_obj.end.strftime("%H:%M") if slot_obj is not None else "00:00",
+                "target_soc": int(target_soc) if target_soc is not None else None,
+            })
+
+        t_inv.discharge_slots = []
+        for idx in range(1, num_dis_slots + 1):
+            slot_obj = getattr(inv, f"discharge_slot_{idx}", None)
+            target_soc = getattr(inv, f"discharge_target_soc_{idx}", None)
+            t_inv.discharge_slots.append({
+                "slot": idx,
+                "start": slot_obj.start.strftime("%H:%M") if slot_obj is not None else "00:00",
+                "end": slot_obj.end.strftime("%H:%M") if slot_obj is not None else "00:00",
+                "target_soc": int(target_soc) if target_soc is not None else None,
+            })
+
+        pause_mode = getattr(inv, "battery_pause_mode", 0)
+        t_inv.battery_pause_mode = int(getattr(pause_mode, "value", pause_mode) if pause_mode is not None else 0)
+        t_inv.battery_pause_mode_label = getattr(pause_mode, "name", str(pause_mode)) if pause_mode is not None else "DISABLED"
+        ps1 = getattr(inv, "battery_pause_slot_1", None)
+        if ps1 is not None:
+            t_inv.battery_pause_slot_start = ps1.start
+            t_inv.battery_pause_slot_end = ps1.end
+
+        t_inv.enable_eps = bool(getattr(inv, "enable_eps", False))
+        exp_pri = getattr(inv, "export_priority", 0)
+        t_inv.export_priority = int(getattr(exp_pri, "value", exp_pri) if exp_pri is not None else 0)
+        t_inv.export_priority_label = getattr(exp_pri, "name", str(exp_pri)) if exp_pri is not None else "LOAD_FIRST"
+        raw_chg_ac = getattr(inv, "battery_charge_limit_ac", None)
+        t_inv.battery_charge_limit_ac = int(raw_chg_ac if raw_chg_ac is not None else 100)
+        raw_dis_ac = getattr(inv, "battery_discharge_limit_ac", None)
+        t_inv.battery_discharge_limit_ac = int(raw_dis_ac if raw_dis_ac is not None else 100)
+        t_inv.enable_rtc = bool(getattr(inv, "enable_rtc", True))
+
         bats_out: list[BatteryTelemetry] = []
         if plant.batteries:
             for bat in plant.batteries:
@@ -776,6 +851,12 @@ class AsyncPlantPoller:
             except Exception:
                 pass
 
+    @staticmethod
+    def _parse_time_slot(start_str: Any, end_str: Any) -> TimeSlot:
+        sh, sm = [int(x) for x in str(start_str).split(":")[:2]]
+        eh, em = [int(x) for x in str(end_str).split(":")[:2]]
+        return TimeSlot(start=dt_time(sh, sm), end=dt_time(eh, em))
+
     async def _execute_inverter_command(self, inv_client: GivInverterClient, cmd: WebControlCommand) -> bool:
         try:
             inv = inv_client.plant.inverter
@@ -795,22 +876,54 @@ class AsyncPlantPoller:
                 reqs = commands.set_enable_discharge(bool(p["enabled"]))
             elif cmd.action == "set_charge_target_soc":
                 reqs = commands.set_charge_target_enabled(int(p["soc"]))
+            elif cmd.action == "set_enable_charge_target":
+                if bool(p["enabled"]):
+                    soc = int(p.get("soc", self.snapshot.inverter.charge_target_soc or 100))
+                    reqs = commands.set_charge_target_enabled(soc)
+                else:
+                    reqs = commands.disable_charge_target()
             elif cmd.action == "set_battery_soc_reserve":
                 reqs = commands.set_battery_soc_reserve(int(p["soc"]))
+            elif cmd.action == "set_battery_power_reserve":
+                reqs = commands.set_battery_power_reserve(int(p["soc"]))
             elif cmd.action == "set_battery_charge_limit":
                 reqs = commands.set_battery_charge_limit(int(p["limit"]))
             elif cmd.action == "set_battery_discharge_limit":
                 reqs = commands.set_battery_discharge_limit(int(p["limit"]))
+            elif cmd.action == "set_active_power_rate":
+                reqs = commands.set_active_power_rate(int(p["rate"]))
             elif cmd.action == "set_charge_slot_1":
-                sh, sm = [int(x) for x in str(p["start"]).split(":")[:2]]
-                eh, em = [int(x) for x in str(p["end"]).split(":")[:2]]
-                slot = TimeSlot(start=dt_time(sh, sm), end=dt_time(eh, em))
-                reqs = commands.set_charge_slot(1, slot, slot_map)
+                reqs = commands.set_charge_slot(1, self._parse_time_slot(p["start"], p["end"]), slot_map)
             elif cmd.action == "set_discharge_slot_1":
-                sh, sm = [int(x) for x in str(p["start"]).split(":")[:2]]
-                eh, em = [int(x) for x in str(p["end"]).split(":")[:2]]
-                slot = TimeSlot(start=dt_time(sh, sm), end=dt_time(eh, em))
-                reqs = commands.set_discharge_slot(1, slot, slot_map)
+                reqs = commands.set_discharge_slot(1, self._parse_time_slot(p["start"], p["end"]), slot_map)
+            elif cmd.action == "set_charge_slot":
+                slot_idx = int(p["slot"])
+                reqs = commands.set_charge_slot(slot_idx, self._parse_time_slot(p["start"], p["end"]), slot_map)
+            elif cmd.action == "reset_charge_slot":
+                reqs = commands.reset_charge_slot(int(p["slot"]), slot_map)
+            elif cmd.action == "set_discharge_slot":
+                slot_idx = int(p["slot"])
+                reqs = commands.set_discharge_slot(slot_idx, self._parse_time_slot(p["start"], p["end"]), slot_map)
+            elif cmd.action == "reset_discharge_slot":
+                reqs = commands.reset_discharge_slot(int(p["slot"]), slot_map)
+            elif cmd.action == "set_battery_pause_mode":
+                reqs = commands.set_battery_pause_mode(BatteryPauseMode(int(p["mode"])))
+            elif cmd.action == "set_pause_slot":
+                reqs = commands.set_pause_slot(self._parse_time_slot(p["start"], p["end"]))
+            elif cmd.action == "reset_pause_slot":
+                reqs = commands.set_pause_slot(None)
+            elif cmd.action == "set_battery_charge_limit_ac":
+                reqs = commands.set_battery_charge_limit_ac(int(p["limit"]))
+            elif cmd.action == "set_battery_discharge_limit_ac":
+                reqs = commands.set_battery_discharge_limit_ac(int(p["limit"]))
+            elif cmd.action == "set_export_priority":
+                reqs = commands.set_export_priority(ExportPriority(int(p["priority"])))
+            elif cmd.action == "set_enable_eps":
+                reqs = commands.set_enable_eps(bool(p["enabled"]))
+            elif cmd.action == "set_enable_rtc":
+                reqs = commands.set_enable_rtc(bool(p["enabled"]))
+            elif cmd.action == "set_inverter_reboot":
+                reqs = commands.set_inverter_reboot()
             elif cmd.action == "sync_time":
                 reqs = commands.set_system_date_time(datetime.now())
             else:
@@ -821,7 +934,10 @@ class AsyncPlantPoller:
             self.log_event("success", f"Inverter: {cmd.description}")
             return True
         except Exception as exc:
-            self.log_event("error", f"Inverter command failed ({cmd.description}): {exc}")
+            err_detail = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+            if cmd.action in ("set_charge_slot", "reset_charge_slot") and int(cmd.params.get("slot", 0) or 0) == 2 and len(inv_client.plant.inverter.slot_map.charge_slots) > 2:
+                err_detail += " (Charge Slot 2 HR 31/32 is rejected by this firmware; use Slot 1 or Slots 3–10)"
+            self.log_event("error", f"Inverter command failed ({cmd.description}): {err_detail}")
             return False
 
     def _write_evc_registers(self, addr: int, values: list[int]) -> bool:
@@ -1026,31 +1142,60 @@ class AsyncPlantPoller:
                         f"EV Charger (Solar): Auto-started charging ({int(allocated_solar_w)}W excess solar available)",
                     )
 
-        # 2. Max Battery Discharge Power to EV
+        # 2. Unified Low-SoC Discharge Guard & Max Battery Discharge Power to EV
+        inv.low_soc_discharge_guard_enabled = bool(self.config.low_soc_discharge_guard)
         if inv_client is not None and inv_detected and inv.connected:
+            reserve_soc = max(4, int(inv.battery_soc_reserve or 4))
+            if self.config.low_soc_discharge_guard:
+                if inv.battery_soc <= reserve_soc:
+                    self._low_soc_guard_active = True
+                elif inv.battery_soc >= min(100, reserve_soc + 2):
+                    self._low_soc_guard_active = False
+            else:
+                self._low_soc_guard_active = False
+            inv.low_soc_discharge_guard_active = self._low_soc_guard_active
+
             ev_active = self.evc_enabled and (evc.charging_state == "Charging" or evc.active_power_w > 150)
-            if ev_active:
-                max_w = max(0, min(5000, int(self.config.evc_max_battery_discharge_w)))
-                target_pct = (
-                    0
-                    if max_w <= 0
-                    else min(50, max(1, round(max_w * 50 / max(1, inv.battery_max_power))))
-                )
+            max_w = max(0, min(5000, int(self.config.evc_max_battery_discharge_w)))
+            ev_target_pct = (
+                0
+                if max_w <= 0
+                else min(50, max(1, round(max_w * 50 / max(1, inv.battery_max_power))))
+            )
+
+            if self._low_soc_guard_active:
+                target_pct = 0
+                reason = "low_soc"
+            elif ev_active:
+                target_pct = ev_target_pct
+                reason = "evc"
+            else:
+                target_pct = None
+                reason = None
+
+            if target_pct is not None:
                 if inv.battery_discharge_limit != target_pct:
-                    if self._saved_inv_discharge_limit is None:
+                    if self._saved_inv_discharge_limit is None and inv.battery_discharge_limit > 0:
                         self._saved_inv_discharge_limit = inv.battery_discharge_limit
                     try:
                         reqs = commands.set_battery_discharge_limit(target_pct)
                         await inv_client.one_shot_command(reqs, timeout=2.5, retries=2)
                         inv.battery_discharge_limit = target_pct
-                        if self._evc_last_logged_cap_pct != target_pct:
+                        if reason == "low_soc":
+                            if self._low_soc_last_logged_active is not True:
+                                self._low_soc_last_logged_active = True
+                                self.log_event(
+                                    "warning",
+                                    f"Battery Guard: SoC ({inv.battery_soc}%) <= Reserve ({reserve_soc}%) — capped discharge limit to 0%",
+                                )
+                        elif self._evc_last_logged_cap_pct != target_pct:
                             self._evc_last_logged_cap_pct = target_pct
                             self.log_event(
                                 "info",
                                 f"EV Charger: Capped inverter battery discharge limit to {target_pct}% (~{max_w}W) during EV charge",
                             )
                     except Exception as exc:
-                        self.log_event("warning", f"Failed to apply EV battery discharge limit: {exc}")
+                        self.log_event("warning", f"Failed to apply battery discharge limit: {exc}")
             elif self._saved_inv_discharge_limit is not None:
                 restore_pct = self._saved_inv_discharge_limit
                 try:
@@ -1059,12 +1204,15 @@ class AsyncPlantPoller:
                     inv.battery_discharge_limit = restore_pct
                     self._saved_inv_discharge_limit = None
                     self._evc_last_logged_cap_pct = None
+                    self._low_soc_last_logged_active = None
                     self.log_event(
                         "info",
-                        f"EV Charger: Restored inverter battery discharge limit to {restore_pct}%",
+                        f"Battery Guard / EV Charger: Restored inverter battery discharge limit to {restore_pct}%",
                     )
                 except Exception as exc:
                     self.log_event("warning", f"Failed to restore inverter battery discharge limit: {exc}")
+        else:
+            inv.low_soc_discharge_guard_active = False
 
     def _execute_evc_command(self, cmd: WebControlCommand) -> bool:
         p = cmd.params

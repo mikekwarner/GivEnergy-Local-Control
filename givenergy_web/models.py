@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, time
+from typing import Any
 
 
 @dataclass
@@ -26,6 +27,7 @@ class InverterTelemetry:
     modbus_address: int = 17
     status: str = "—"
     system_time: datetime | None = None
+    system_time_polled_at: datetime | None = None
     work_time_hours: int = 0
     fault_code: str = "0000"
     warning_code: str = "0000"
@@ -121,6 +123,26 @@ class InverterTelemetry:
     discharge_target_soc_1: int = 4
     discharge_slot_2_start: time = field(default_factory=lambda: time(0, 0))
     discharge_slot_2_end: time = field(default_factory=lambda: time(0, 0))
+
+    # Extended Capabilities, All Slots & Additional Inverter Controls
+    num_charge_slots: int = 2
+    num_discharge_slots: int = 2
+    has_ac_config_block: bool = False
+    is_three_phase: bool = False
+    charge_slots: list[dict[str, Any]] = field(default_factory=list)
+    discharge_slots: list[dict[str, Any]] = field(default_factory=list)
+    battery_pause_mode: int = 0
+    battery_pause_mode_label: str = "DISABLED"
+    battery_pause_slot_start: time = field(default_factory=lambda: time(0, 0))
+    battery_pause_slot_end: time = field(default_factory=lambda: time(0, 0))
+    enable_eps: bool = False
+    export_priority: int = 0
+    export_priority_label: str = "LOAD_FIRST"
+    battery_charge_limit_ac: int = 100
+    battery_discharge_limit_ac: int = 100
+    enable_rtc: bool = True
+    low_soc_discharge_guard_enabled: bool = True
+    low_soc_discharge_guard_active: bool = False
 
     @property
     def operating_mode_summary(self) -> str:
